@@ -15,7 +15,10 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
 ]
-dependencies = []
+dependencies = [
+    "huggingface-hub>=0.35.1",
+    "openai>=1.109.1",
+]
 
 [project.optional-dependencies]
 dev = [

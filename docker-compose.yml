@@ -23,7 +23,7 @@ services:
       HF_TOKEN: ${HF_TOKEN:-}
     command:
       - "--model"
-      - "meta-llama/Meta-Llama-3-8B-Instruct"
+      - "meta-llama/Llama-3.1-8B-Instruct"
       - "--dtype"
       - "float16"
       - "--tensor-parallel-size"
@@ -36,9 +36,32 @@ services:
               capabilities: ["gpu"]
               count: 1
     volumes:
-      - hf_cache:/root/.cache/huggingface
-    depends_on:
-      - db
+      - ~/.cache/huggingface:/root/.cache/huggingface
+  
+  # vllm-embed:
+  #   image: vllm/vllm-openai:latest
+  #   deploy:
+  #     resources:
+  #       reservations:
+  #         devices:
+  #           - capabilities: ["gpu"]
+  #   restart: unless-stopped
+  #   ports:
+  #     - "8001:8000"
+  #   volumes:
+  #     - ~/.cache/huggingface:/root/.cache/huggingface
+  #   environment:
+  #     - VLLM_USE_XFORMERS=0
+  #     - VLLM_LOGGING_LEVEL=INFO
+  #   command: >
+  #     --model intfloat/e5-base-v2
+  #     --dtype auto
+  #     --api-key token-anything
+  #     --port 8000
+  #     --host 0.0.0.0
+  #     --max-num-seqs 2048
+  #   ipc: host
+  #   shm_size: "8gb"
 
 volumes:
   pg_data:
