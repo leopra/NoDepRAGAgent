@@ -1,4 +1,3 @@
-version: "3.9"
 
 services:
   db:
@@ -12,31 +11,51 @@ services:
     volumes:
       - pg_data:/var/lib/postgresql/data
 
-  vllm:
-    image: vllm/vllm-openai:latest
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    restart: always
     ports:
-      - "8000:8000"
-    env_file:
-      - .env
-    environment:
-      # Supply a Hugging Face token if the model requires gated access.
-      HF_TOKEN: ${HF_TOKEN:-}
-    command:
-      - "--model"
-      - "meta-llama/Llama-3.1-8B-Instruct"
-      - "--dtype"
-      - "float16"
-      - "--tensor-parallel-size"
-      - "1"
+      - "11434:11434"   # Ollama API port
+    volumes:
+      - ollama_models:/root/.ollama
     deploy:
       resources:
         reservations:
           devices:
             - driver: nvidia
-              capabilities: ["gpu"]
-              count: 1
-    volumes:
-      - ~/.cache/huggingface:/root/.cache/huggingface
+              count: all
+              capabilities: [gpu]
+  # vllm:
+  #   image: vllm/vllm-openai:latest
+  #   ports:
+  #     - "8000:8000"
+  #   env_file:
+  #     - .env
+  #   environment:
+  #     # Supply a Hugging Face token if the model requires gated access.
+  #     HF_TOKEN: ${HF_TOKEN:-}
+  #   command:
+  #     - "--model"
+  #     - "openai/gpt-oss-20b"
+  #     - "--dtype"
+  #     - "float16"
+  #     - "--tensor-parallel-size"
+  #     - "1"
+  #     - "--max-model-len" 
+  #     - "4096"
+  #     - "--quantization"
+  #     - "none"
+
+  #   deploy:
+  #     resources:
+  #       reservations:
+  #         devices:
+  #           - driver: nvidia
+  #             capabilities: ["gpu"]
+  #             count: 1
+  #   volumes:
+  #     - ~/.cache/huggingface:/root/.cache/huggingface
   
   # vllm-embed:
   #   image: vllm/vllm-openai:latest
@@ -66,3 +85,4 @@ services:
 volumes:
   pg_data:
   hf_cache:
+  ollama_models:
