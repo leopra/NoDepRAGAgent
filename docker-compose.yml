@@ -1,0 +1,45 @@
+version: "3.9"
+
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: rag_user
+      POSTGRES_PASSWORD: rag_password
+      POSTGRES_DB: rag_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+
+  vllm:
+    image: vllm/vllm-openai:latest
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      # Supply a Hugging Face token if the model requires gated access.
+      HF_TOKEN: ${HF_TOKEN:-}
+    command:
+      - "--model"
+      - "meta-llama/Meta-Llama-3-8B-Instruct"
+      - "--dtype"
+      - "float16"
+      - "--tensor-parallel-size"
+      - "1"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              capabilities: ["gpu"]
+              count: 1
+    volumes:
+      - hf_cache:/root/.cache/huggingface
+    depends_on:
+      - db
+
+volumes:
+  pg_data:
+  hf_cache:
