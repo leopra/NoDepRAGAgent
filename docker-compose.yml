@@ -11,6 +11,20 @@ services:
     volumes:
       - pg_data:/var/lib/postgresql/data
 
+  weaviate:
+    image: semitechnologies/weaviate:1.24.12
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      QUERY_DEFAULTS_LIMIT: 25
+      AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: "true"
+      DEFAULT_VECTORIZER_MODULE: "none"
+      PERSISTENCE_DATA_PATH: "/var/lib/weaviate"
+      CLUSTER_HOSTNAME: "node1"
+    volumes:
+      - weaviate_data:/var/lib/weaviate
+
   ollama:
     image: ollama/ollama:latest
     container_name: ollama
@@ -86,3 +100,4 @@ volumes:
   pg_data:
   hf_cache:
   ollama_models:
+  weaviate_data:
