@@ -92,6 +92,7 @@ def _postgres_engine() -> Engine:
 
 def query_postgres(*, sql: str, limit: int = 50) -> Dict[str, Any]:
     """Run a SQL statement and return a JSON-serializable payload."""
+    #TODO query sanification
 
     sql = sql.strip()
     if not sql:

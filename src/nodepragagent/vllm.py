@@ -41,7 +41,8 @@ class VLLMClient:
         self._client = client or AsyncOpenAI(base_url=self.config.base_url, api_key=self.config.api_key)
         schema_message = (
             "Database Schema\n"
-            "You can call the `query_postgres` tool to run SQL. The database schema is as follows:\n"
+            "Choose between the `query_postgres` SQL tool and the `query_weaviate` vector search tool, or call both if needed to fully answer the request.\n"
+            "When SQL is appropriate, call `query_postgres` with a well-formed query against the following schema:\n"
             f"{schema_summary()}"
         )
         self.history: List[ChatCompletionMessageParam] = [
