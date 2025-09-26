@@ -18,6 +18,7 @@ classifiers = [
 dependencies = [
     "huggingface-hub>=0.35.1",
     "openai>=1.109.1",
+    "sqlalchemy>=2.0.43",
 ]
 
 [project.optional-dependencies]
