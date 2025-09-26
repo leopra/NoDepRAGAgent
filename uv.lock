@@ -526,6 +526,7 @@ source = { editable = "." }
 dependencies = [
     { name = "huggingface-hub" },
     { name = "openai" },
+    { name = "pytest" },
     { name = "sqlalchemy" },
     { name = "weaviate" },
     { name = "weaviate-client" },
@@ -541,6 +542,7 @@ dev = [
 requires-dist = [
     { name = "huggingface-hub", specifier = ">=0.35.1" },
     { name = "openai", specifier = ">=1.109.1" },
+    { name = "pytest", specifier = ">=8.4.2" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.6" },
     { name = "sqlalchemy", specifier = ">=2.0.43" },

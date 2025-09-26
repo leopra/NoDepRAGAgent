@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
@@ -19,6 +19,26 @@ from openai.types.shared_params import FunctionDefinition
 from .db import create_postgres_engine
 
 WEAVIATE_CLASS = "ProductInsight"
+
+
+def _semantic_score(additional: Dict[str, Any]) -> Optional[float]:
+    """Translate Weaviate `_additional` metadata into a relevance score."""
+
+    certainty = additional.get("certainty")
+    if certainty is not None:
+        try:
+            return float(certainty)
+        except (TypeError, ValueError):
+            return None
+
+    distance = additional.get("distance")
+    if distance is not None:
+        try:
+            return 1.0 - float(distance)
+        except (TypeError, ValueError):
+            return None
+
+    return None
 
 
 def sum_two_numbers_definition() -> FunctionDefinition:
@@ -162,6 +182,12 @@ def weaviate_query_definition() -> FunctionDefinition:
                     "minimum": 1,
                     "maximum": 10,
                 },
+                "category": {
+                    "type": "string",
+                    "description": (
+                        "Optional category filter; only documents with this category will be returned."
+                    ),
+                },
             },
             "required": ["query"],
         },
@@ -177,7 +203,7 @@ def _weaviate_client() -> weaviate.Client:
     return weaviate.Client(url=url, auth_client_secret=auth)
 
 
-def query_weaviate(*, query: str, limit: int = 3) -> Dict[str, Any]:
+def query_weaviate(*, query: str, limit: int = 3, category: Optional[str] = None) -> Dict[str, Any]:
     """Query Weaviate for documents related to the supplied query string."""
 
     normalized_limit = max(1, min(limit, 10))
@@ -186,14 +212,28 @@ def query_weaviate(*, query: str, limit: int = 3) -> Dict[str, Any]:
         return {"results": [], "error": "Query string must not be empty."}
 
     client = _weaviate_client()
+    where_filter: Optional[Dict[str, Any]] = None
+    if category:
+        normalized_category = category.strip()
+        if normalized_category:
+            where_filter = {
+                "path": ["category"],
+                "operator": "Equal",
+                "valueText": normalized_category,
+            }
+
     try:
-        response = (
+        weaviate_query = (
             client.query.get(WEAVIATE_CLASS, ["title", "category", "content"])
-            .with_bm25(query=query, properties=["title", "content"])
+            .with_near_text({"concepts": [query]})
             .with_limit(normalized_limit)
-            .with_additional(["score"])
-            .do()
+            .with_additional(["distance", "certainty"])
         )
+
+        if where_filter is not None:
+            weaviate_query = weaviate_query.with_where(where_filter)
+
+        response = weaviate_query.do()
     except WeaviateBaseError as exc:  # pragma: no cover - network errors
         return {"results": [], "error": str(exc)}
     except Exception as exc:  # pragma: no cover - unexpected errors
@@ -205,15 +245,19 @@ def query_weaviate(*, query: str, limit: int = 3) -> Dict[str, Any]:
         .get(WEAVIATE_CLASS, [])
     )
 
-    documents = [
-        {
-            "title": hit.get("title"),
-            "category": hit.get("category"),
-            "content": hit.get("content"),
-            "score": hit.get("_additional", {}).get("score"),
-        }
-        for hit in hits
-    ]
+    documents = []
+    for hit in hits:
+        additional = hit.get("_additional", {})
+        documents.append(
+            {
+                "title": hit.get("title"),
+                "category": hit.get("category"),
+                "content": hit.get("content"),
+                "score": _semantic_score(additional),
+                "distance": additional.get("distance"),
+                "certainty": additional.get("certainty"),
+            }
+        )
 
     return {"results": documents}
 
