@@ -4,11 +4,24 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import List, Sequence
-from .tools import sum_two_numbers_tool, sum_two_numbers
+from .tools import (
+    sum_two_numbers_tool,
+    sum_two_numbers,
+    query_weaviate_tool,
+    query_weaviate,
+    query_postgres_tool,
+    query_postgres,
+)
+from .db import schema_summary
 from openai import AsyncOpenAI
 from openai.types.chat import ChatCompletionMessageParam, ChatCompletionMessageFunctionToolCall
 import json
-TOOLS = { sum_two_numbers.__name__ :sum_two_numbers}
+
+TOOLS = {
+    sum_two_numbers.__name__: sum_two_numbers,
+    query_weaviate.__name__: query_weaviate,
+    query_postgres.__name__: query_postgres,
+}
 
 
 @dataclass(frozen=True)
@@ -26,7 +39,14 @@ class VLLMClient:
     def __init__(self, config: VLLMConfig | None = None, client: AsyncOpenAI | None = None) -> None:
         self.config = config or VLLMConfig()
         self._client = client or AsyncOpenAI(base_url=self.config.base_url, api_key=self.config.api_key)
-        self.history: List[ChatCompletionMessageParam] = []
+        schema_message = (
+            "Database Schema\n"
+            "You can call the `query_postgres` tool to run SQL. The database schema is as follows:\n"
+            f"{schema_summary()}"
+        )
+        self.history: List[ChatCompletionMessageParam] = [
+            {"role": "system", "content": schema_message}
+        ]
 
 
     async def generate(
@@ -67,7 +87,7 @@ class VLLMClient:
             messages=messages,
             temperature=temperature,
             max_tokens=max_tokens,
-            tools=[sum_two_numbers_tool()],
+            tools=[sum_two_numbers_tool(), query_weaviate_tool(), query_postgres_tool()],
             tool_choice="auto"
         )
 
