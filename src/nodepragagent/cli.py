@@ -5,7 +5,7 @@ import sys
 from typing import Iterable, List
 
 from openai.types.chat import ChatCompletionMessageParam
-
+from .tools import OPENAI_CHAT_TOOLS
 from .vllm import VLLMClient, VLLMConfig
 
 def _prompt_lines() -> Iterable[str]:
@@ -43,10 +43,10 @@ async def main() -> None:
                 prompt,
                 temperature=1,
                 max_tokens=164,
+                tools=list(OPENAI_CHAT_TOOLS),
             )
         except Exception as exc:  # pragma: no cover - network errors not deterministic in tests
             print(f"[ERROR] Failed to call model: {exc}", file=sys.stderr)
-            history.pop()
             continue
 
         print(f"Agent> {response}")

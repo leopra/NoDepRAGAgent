@@ -1,28 +1,15 @@
 """Utilities for calling a vLLM OpenAI-compatible endpoint."""
 
 from __future__ import annotations
-
+from typing import Any
 from dataclasses import dataclass
 from typing import List, Sequence
-from .tools import (
-    sum_two_numbers_tool,
-    sum_two_numbers,
-    query_weaviate_tool,
-    query_weaviate,
-    query_postgres_tool,
-    query_postgres,
-)
+from .tools import OPENAI_CHAT_TOOLS, TOOLS
 from .db import schema_summary
 from openai import AsyncOpenAI
-from openai.types.chat import ChatCompletionMessageParam, ChatCompletionMessageFunctionToolCall
+from openai.types.chat import ChatCompletionFunctionToolParam, ChatCompletionMessageParam, ChatCompletionMessageFunctionToolCall
 import json
-
-TOOLS = {
-    sum_two_numbers.__name__: sum_two_numbers,
-    query_weaviate.__name__: query_weaviate,
-    query_postgres.__name__: query_postgres,
-}
-
+from .memory import ToolCall
 
 @dataclass(frozen=True)
 class VLLMConfig:
@@ -45,7 +32,7 @@ class VLLMClient:
             "When SQL is appropriate, call `query_postgres` with a well-formed query against the following schema:\n"
             f"{schema_summary()}"
         )
-        self.history: List[ChatCompletionMessageParam] = [
+        self.history: List[Any] = [ #TODO fix typing
             {"role": "system", "content": schema_message}
         ]
 
@@ -57,6 +44,7 @@ class VLLMClient:
         system_prompt: str | None = None,
         temperature: float = 0.0,
         max_tokens: int = 512,
+        tools: Sequence[ChatCompletionFunctionToolParam] | None = None
     ) -> str:
         """Generate a chat completion using the vLLM-backed OpenAI API."""
 
@@ -68,6 +56,7 @@ class VLLMClient:
             self.history,
             temperature=temperature,
             max_tokens=max_tokens,
+            tools=tools,
         )
     
         self.history.append({"role": "assistant", "content": res})
@@ -76,37 +65,44 @@ class VLLMClient:
 
     async def generate_from_messages(
         self,
-        messages: Sequence[ChatCompletionMessageParam],
+        message: str,
         *,
         temperature: float = 0.0,
         max_tokens: int = 512,
+        tools: Sequence[ChatCompletionFunctionToolParam] | None = None
     ) -> str:
         """Generate a completion using an explicit message history."""
 
+        self.history.append({ 'role': 'user', 'content': message}) #TODO use enum and dataclass for user messages
+
+
+        tool_spec = list(tools) if tools is not None else list(OPENAI_CHAT_TOOLS)
+
         response = await self._client.chat.completions.create(
             model=self.config.model,
-            messages=messages,
+            messages=self.history,
             temperature=temperature,
             max_tokens=max_tokens,
-            tools=[sum_two_numbers_tool(), query_weaviate_tool(), query_postgres_tool()],
+            tools=tool_spec,
             tool_choice="auto"
         )
 
         for choice in response.choices:
-            message = choice.message
-            if message.tool_calls:
-                for tool_call in message.tool_calls:
+            msg = choice.message
+            if msg.tool_calls:
+                for tool_call in msg.tool_calls:
                     assert isinstance(tool_call, ChatCompletionMessageFunctionToolCall)
-                    res = TOOLS[tool_call.function.name](**json.loads(tool_call.function.arguments))
-                    self.history.append(tool_call)
+                    arguments = json.loads(tool_call.function.arguments) #TODO raise errors so agent can fix errors
+                    res = TOOLS[tool_call.function.name](**arguments)
+                    self.history.append(ToolCall(name=tool_call.function.name, arguments=tool_call.function.arguments, id=tool_call.id))
                     self.history.append({
                         "role":"tool",
                         "tool_call_id": tool_call.id,
                         "content": json.dumps(res)
                     })
 
-            if message and message.content:
-                return message.content
+            if message and msg.content:
+                return msg.content
         return ""
     
 

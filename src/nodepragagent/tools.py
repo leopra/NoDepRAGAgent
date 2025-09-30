@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import os
-from typing import Any, Dict, List, Optional
+from dataclasses import dataclass
+from typing import Any, Callable, Dict, List, Optional
 
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
@@ -19,6 +20,26 @@ from openai.types.shared_params import FunctionDefinition
 from .db import create_postgres_engine
 
 WEAVIATE_CLASS = "ProductInsight"
+
+
+@dataclass(frozen=True)
+class Tool:
+    """Combine an executable callable with its OpenAI function definition."""
+
+    definition: FunctionDefinition
+    callback: Callable[..., Dict[str, Any]]
+
+    @property
+    def name(self) -> str:
+        return self.definition["name"]
+
+    def to_openai_tool(self) -> ChatCompletionFunctionToolParam:
+        """Return the ChatCompletions tool specification for this tool."""
+
+        return {
+            "type": "function",
+            "function": self.definition,
+        }
 
 
 def _semantic_score(additional: Dict[str, Any]) -> Optional[float]:
@@ -68,15 +89,6 @@ def sum_two_numbers(*, a: float, b: float) -> Dict[str, Any]:
     """Compute the sum of two numbers in a tool-call-friendly format."""
 
     return {"total": a + b}
-
-
-def sum_two_numbers_tool() -> ChatCompletionFunctionToolParam:
-    """Return a chat-completions tool specification for the sum helper."""
-
-    return {
-        "type": "function",
-        "function": sum_two_numbers_definition(),
-    }
 
 
 def postgres_query_definition() -> FunctionDefinition:
@@ -149,15 +161,6 @@ def query_postgres(*, sql: str, limit: int = 50) -> Dict[str, Any]:
         return {"rows": [], "error": str(exc)}
     except Exception as exc:  # pragma: no cover - unexpected errors
         return {"rows": [], "error": str(exc)}
-
-
-def query_postgres_tool() -> ChatCompletionFunctionToolParam:
-    """Tool specification for running SQL queries against Postgres."""
-
-    return {
-        "type": "function",
-        "function": postgres_query_definition(),
-    }
 
 
 def weaviate_query_definition() -> FunctionDefinition:
@@ -262,10 +265,31 @@ def query_weaviate(*, query: str, limit: int = 3, category: Optional[str] = None
     return {"results": documents}
 
 
-def query_weaviate_tool() -> ChatCompletionFunctionToolParam:
-    """Chat-completions tool specification for the Weaviate retrieval helper."""
+SUM_TWO_NUMBERS_TOOL = Tool(
+    definition=sum_two_numbers_definition(),
+    callback=sum_two_numbers,
+)
 
-    return {
-        "type": "function",
-        "function": weaviate_query_definition(),
-    }
+QUERY_POSTGRES_TOOL = Tool(
+    definition=postgres_query_definition(),
+    callback=query_postgres,
+)
+
+QUERY_WEAVIATE_TOOL = Tool(
+    definition=weaviate_query_definition(),
+    callback=query_weaviate,
+)
+
+ALL_TOOLS: tuple[Tool, ...] = (
+    SUM_TWO_NUMBERS_TOOL,
+    QUERY_POSTGRES_TOOL,
+    QUERY_WEAVIATE_TOOL,
+)
+
+TOOLS: dict[str, Callable[..., Dict[str, Any]]] = {
+    tool.name: tool.callback for tool in ALL_TOOLS
+}
+
+OPENAI_CHAT_TOOLS: tuple[ChatCompletionFunctionToolParam, ...] = tuple(
+    tool.to_openai_tool() for tool in ALL_TOOLS
+)
