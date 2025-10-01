@@ -26,20 +26,22 @@ WEAVIATE_CLASS = "ProductInsight"
 class Tool:
     """Combine an executable callable with its OpenAI function definition."""
 
-    definition: FunctionDefinition
+    name: str
+    description: str
+    parameters: Dict[str, Any]
     callback: Callable[..., Dict[str, Any]]
-
-    @property
-    def name(self) -> str:
-        return self.definition["name"]
 
     def to_openai_tool(self) -> ChatCompletionFunctionToolParam:
         """Return the ChatCompletions tool specification for this tool."""
 
-        return {
-            "type": "function",
-            "function": self.definition,
-        }
+        return ChatCompletionFunctionToolParam(
+            type="function",
+            function=FunctionDefinition(
+                name=self.name,
+                description=self.description,
+                parameters=self.parameters,
+            ),
+        )
 
 
 def _semantic_score(additional: Dict[str, Any]) -> Optional[float]:
@@ -62,59 +64,10 @@ def _semantic_score(additional: Dict[str, Any]) -> Optional[float]:
     return None
 
 
-def sum_two_numbers_definition() -> FunctionDefinition:
-    """Return the JSON schema definition for a two-number summation tool."""
-
-    return {
-        "name": "sum_two_numbers",
-        "description": "Add two numeric values and return their total.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "a": {
-                    "type": "number",
-                    "description": "First addend.",
-                },
-                "b": {
-                    "type": "number",
-                    "description": "Second addend.",
-                },
-            },
-            "required": ["a", "b"],
-        },
-    }
-
-
 def sum_two_numbers(*, a: float, b: float) -> Dict[str, Any]:
     """Compute the sum of two numbers in a tool-call-friendly format."""
 
     return {"total": a + b}
-
-
-def postgres_query_definition() -> FunctionDefinition:
-    """JSON schema definition for the Postgres SQL execution tool."""
-
-    return {
-        "name": "query_postgres",
-        "description": "Execute a SQL query against the Postgres operational database.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "sql": {
-                    "type": "string",
-                    "description": "SQL statement to run; prefer read-only SELECT queries.",
-                },
-                "limit": {
-                    "type": "integer",
-                    "description": "Maximum number of rows to return (default 50).",
-                    "minimum": 1,
-                    "maximum": 200,
-                },
-            },
-            "required": ["sql"],
-        },
-    }
-
 
 def _postgres_engine() -> Engine:
     """Create a SQLAlchemy engine for Postgres using environment variables."""
@@ -124,7 +77,7 @@ def _postgres_engine() -> Engine:
 
 def query_postgres(*, sql: str, limit: int = 50) -> Dict[str, Any]:
     """Run a SQL statement and return a JSON-serializable payload."""
-    #TODO query sanification
+    # TODO query sanification
 
     sql = sql.strip()
     if not sql:
@@ -161,40 +114,6 @@ def query_postgres(*, sql: str, limit: int = 50) -> Dict[str, Any]:
         return {"rows": [], "error": str(exc)}
     except Exception as exc:  # pragma: no cover - unexpected errors
         return {"rows": [], "error": str(exc)}
-
-
-def weaviate_query_definition() -> FunctionDefinition:
-    """JSON schema definition for the Weaviate document retrieval tool."""
-
-    return {
-        "name": "query_weaviate",
-        "description": (
-            "Retrieve the most relevant product or company insight documents from the Weaviate"
-            " vector database."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "query": {
-                    "type": "string",
-                    "description": "Natural language query describing the needed information.",
-                },
-                "limit": {
-                    "type": "integer",
-                    "description": "Maximum number of documents to return (default 3).",
-                    "minimum": 1,
-                    "maximum": 10,
-                },
-                "category": {
-                    "type": "string",
-                    "description": (
-                        "Optional category filter; only documents with this category will be returned."
-                    ),
-                },
-            },
-            "required": ["query"],
-        },
-    }
 
 
 def _weaviate_client() -> weaviate.Client:
@@ -266,17 +185,75 @@ def query_weaviate(*, query: str, limit: int = 3, category: Optional[str] = None
 
 
 SUM_TWO_NUMBERS_TOOL = Tool(
-    definition=sum_two_numbers_definition(),
+    name="sum_two_numbers",
+    description="Add two numeric values and return their total.",
+    parameters={
+        "type": "object",
+        "properties": {
+            "a": {
+                "type": "number",
+                "description": "First addend.",
+            },
+            "b": {
+                "type": "number",
+                "description": "Second addend.",
+            },
+        },
+        "required": ["a", "b"],
+    },
     callback=sum_two_numbers,
 )
 
 QUERY_POSTGRES_TOOL = Tool(
-    definition=postgres_query_definition(),
+    name="query_postgres",
+    description="Execute a SQL query against the Postgres operational database.",
+    parameters={
+        "type": "object",
+        "properties": {
+            "sql": {
+                "type": "string",
+                "description": "SQL statement to run; prefer read-only SELECT queries.",
+            },
+            "limit": {
+                "type": "integer",
+                "description": "Maximum number of rows to return (default 50).",
+                "minimum": 1,
+                "maximum": 200,
+            },
+        },
+        "required": ["sql"],
+    },
     callback=query_postgres,
 )
 
 QUERY_WEAVIATE_TOOL = Tool(
-    definition=weaviate_query_definition(),
+    name="query_weaviate",
+    description=(
+        "Retrieve the most relevant product or company insight documents from the Weaviate"
+        " vector database."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "Natural language query describing the needed information.",
+            },
+            "limit": {
+                "type": "integer",
+                "description": "Maximum number of documents to return (default 3).",
+                "minimum": 1,
+                "maximum": 10,
+            },
+            "category": {
+                "type": "string",
+                "description": (
+                    "Optional category filter; only documents with this category will be returned."
+                ),
+            },
+        },
+        "required": ["query"],
+    },
     callback=query_weaviate,
 )
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 from typing import Any
 from dataclasses import dataclass
+from enum import Enum
 from typing import List, Sequence
 from .tools import OPENAI_CHAT_TOOLS, TOOLS
 from .db import schema_summary
@@ -11,6 +12,8 @@ from openai.types.chat import ChatCompletionFunctionToolParam, ChatCompletionMes
 import json
 from .memory import ToolCall
 
+MAX_ITERATIONS = 3
+
 @dataclass(frozen=True)
 class VLLMConfig:
     """Configuration for connecting to a local vLLM server."""
@@ -18,6 +21,28 @@ class VLLMConfig:
     base_url: str = "http://localhost:11434/v1"
     api_key: str = "EMPTY"
     model: str = "gpt-oss:20b"
+
+
+class MessageRole(str, Enum):
+    USER = "user"
+    ASSISTANT = "assistant"
+
+
+@dataclass(frozen=True)
+class UserMessage:
+    content: str
+    role: MessageRole = MessageRole.USER
+
+    def as_dict(self) -> dict[str, str]:
+        return {"role": self.role.value, "content": self.content}
+    
+@dataclass(frozen=True)
+class AssistantMessage:
+    content: str
+    role: MessageRole = MessageRole.ASSISTANT
+
+    def as_dict(self) -> dict[str, str]:
+        return {"role": self.role.value, "content": self.content}
 
 
 class VLLMClient:
@@ -50,7 +75,7 @@ class VLLMClient:
 
         if system_prompt:
             self.history.append({"role": "system", "content": system_prompt})
-        self.history.append({"role": "user", "content": prompt})
+        self.history.append(UserMessage(prompt).as_dict())
 
         res = await self.generate_from_messages(
             self.history,
@@ -73,37 +98,42 @@ class VLLMClient:
     ) -> str:
         """Generate a completion using an explicit message history."""
 
-        self.history.append({ 'role': 'user', 'content': message}) #TODO use enum and dataclass for user messages
+        self.history.append(UserMessage(message).as_dict())
 
 
         tool_spec = list(tools) if tools is not None else list(OPENAI_CHAT_TOOLS)
 
-        response = await self._client.chat.completions.create(
-            model=self.config.model,
-            messages=self.history,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            tools=tool_spec,
-            tool_choice="auto"
-        )
+        it = 0
+        while it < MAX_ITERATIONS:
+            response = await self._client.chat.completions.create(
+                model=self.config.model,
+                messages=self.history,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                tools=tool_spec,
+                tool_choice="auto"
+            )
 
-        for choice in response.choices:
-            msg = choice.message
-            if msg.tool_calls:
-                for tool_call in msg.tool_calls:
-                    assert isinstance(tool_call, ChatCompletionMessageFunctionToolCall)
-                    arguments = json.loads(tool_call.function.arguments) #TODO raise errors so agent can fix errors
-                    res = TOOLS[tool_call.function.name](**arguments)
-                    self.history.append(ToolCall(name=tool_call.function.name, arguments=tool_call.function.arguments, id=tool_call.id))
-                    self.history.append({
-                        "role":"tool",
-                        "tool_call_id": tool_call.id,
-                        "content": json.dumps(res)
-                    })
+            for choice in response.choices:
+                msg = choice.message
+                if msg.content != "":
+                    self.history.append(AssistantMessage(message).as_dict())
+                elif msg.tool_calls:
+                    for tool_call in msg.tool_calls:
+                        assert isinstance(tool_call, ChatCompletionMessageFunctionToolCall)
+                        arguments = json.loads(tool_call.function.arguments) #TODO raise errors so agent can fix errors
+                        res = TOOLS[tool_call.function.name](**arguments)
+                        
+                        self.history.append(ToolCall(name=tool_call.function.name, arguments=tool_call.function.arguments, id=tool_call.id))
+                        self.history.append({
+                            "role":"tool",
+                            "tool_call_id": tool_call.id,
+                            "content": json.dumps(res)
+                        })
 
-            if message and msg.content:
-                return msg.content
-        return ""
+                if message and msg.content:
+                    return msg.content
+            it += 1
     
 
     async def call_tool_and_follow_up(self):
