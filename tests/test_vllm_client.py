@@ -20,9 +20,11 @@ def _chat_response(choices: list[SimpleNamespace]) -> SimpleNamespace:
 
 def test_generate_returns_mocked_content() -> None:
     mock_client = MagicMock()
-    mock_client.chat.completions.create.return_value = _chat_response([
-        _chat_choice("mocked response"),
-    ])
+    mock_client.chat.completions.create.return_value = _chat_response(
+        [
+            _chat_choice("mocked response"),
+        ]
+    )
     client = VLLMClient(config=VLLMConfig(model="mock-model"), client=mock_client)
 
     result = client.generate("hello", temperature=0.5, max_tokens=64)
@@ -38,9 +40,11 @@ def test_generate_returns_mocked_content() -> None:
 
 def test_generate_includes_system_prompt_when_provided() -> None:
     mock_client = MagicMock()
-    mock_client.chat.completions.create.return_value = _chat_response([
-        _chat_choice("another response"),
-    ])
+    mock_client.chat.completions.create.return_value = _chat_response(
+        [
+            _chat_choice("another response"),
+        ]
+    )
     client = VLLMClient(client=mock_client)
 
     client.generate("question", system_prompt="be concise")
@@ -70,9 +74,11 @@ def test_generate_from_messages_sends_history() -> None:
         {"role": "user", "content": "how are you?"},
     ]
     mock_client = MagicMock()
-    mock_client.chat.completions.create.return_value = _chat_response([
-        _chat_choice("doing well"),
-    ])
+    mock_client.chat.completions.create.return_value = _chat_response(
+        [
+            _chat_choice("doing well"),
+        ]
+    )
     client = VLLMClient(client=mock_client)
 
     result = client.generate_from_messages(history, temperature=0.7, max_tokens=256)

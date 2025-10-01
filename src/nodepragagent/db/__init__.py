@@ -41,6 +41,8 @@ def schema_summary() -> str:
             pk_flag = " PRIMARY KEY" if column.primary_key else ""
             fk = next(iter(column.foreign_keys), None)
             fk_repr = f" REFERENCES {fk.target_fullname}" if fk is not None else ""
-            lines.append(f"  - {column.name} {type_repr}{pk_flag} {nullability}{default_repr}{fk_repr}".rstrip())
+            lines.append(
+                f"  - {column.name} {type_repr}{pk_flag} {nullability}{default_repr}{fk_repr}".rstrip()
+            )
         lines.append("")
     return "\n".join(lines).strip()

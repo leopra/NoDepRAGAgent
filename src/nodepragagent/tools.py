@@ -69,6 +69,16 @@ def sum_two_numbers(*, a: float, b: float) -> Dict[str, Any]:
 
     return {"total": a + b}
 
+
+def final_answer(*, answer: str, sources: Optional[List[str]] = None) -> Dict[str, Any]:
+    """Return the final answer payload that should be surfaced to the user."""
+
+    payload: Dict[str, Any] = {"answer": answer}
+    if sources is not None:
+        payload["sources"] = sources
+    return payload
+
+
 def _postgres_engine() -> Engine:
     """Create a SQLAlchemy engine for Postgres using environment variables."""
 
@@ -161,11 +171,7 @@ def query_weaviate(*, query: str, limit: int = 3, category: Optional[str] = None
     except Exception as exc:  # pragma: no cover - unexpected errors
         return {"results": [], "error": str(exc)}
 
-    hits: List[Dict[str, Any]] = (
-        response.get("data", {})
-        .get("Get", {})
-        .get(WEAVIATE_CLASS, [])
-    )
+    hits: List[Dict[str, Any]] = response.get("data", {}).get("Get", {}).get(WEAVIATE_CLASS, [])
 
     documents = []
     for hit in hits:
@@ -257,15 +263,35 @@ QUERY_WEAVIATE_TOOL = Tool(
     callback=query_weaviate,
 )
 
+FINAL_ANSWER_TOOL = Tool(
+    name="final_answer",
+    description="Return the final answer to the user and stop further tool usage.",
+    parameters={
+        "type": "object",
+        "properties": {
+            "answer": {
+                "type": "string",
+                "description": "Final response that should be relayed to the user.",
+            },
+            "sources": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Optional list of references or citations supporting the answer.",
+            },
+        },
+        "required": ["answer"],
+    },
+    callback=final_answer,
+)
+
 ALL_TOOLS: tuple[Tool, ...] = (
     SUM_TWO_NUMBERS_TOOL,
     QUERY_POSTGRES_TOOL,
     QUERY_WEAVIATE_TOOL,
+    FINAL_ANSWER_TOOL,
 )
 
-TOOLS: dict[str, Callable[..., Dict[str, Any]]] = {
-    tool.name: tool.callback for tool in ALL_TOOLS
-}
+TOOLS: dict[str, Callable[..., Dict[str, Any]]] = {tool.name: tool.callback for tool in ALL_TOOLS}
 
 OPENAI_CHAT_TOOLS: tuple[ChatCompletionFunctionToolParam, ...] = tuple(
     tool.to_openai_tool() for tool in ALL_TOOLS

@@ -50,7 +50,9 @@ class Purchase(Base):
     __tablename__ = "purchases"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    customer_id: Mapped[int] = mapped_column(ForeignKey("customers.id", ondelete="CASCADE"), nullable=False)
+    customer_id: Mapped[int] = mapped_column(
+        ForeignKey("customers.id", ondelete="CASCADE"), nullable=False
+    )
     item_id: Mapped[int] = mapped_column(ForeignKey("items.id", ondelete="CASCADE"), nullable=False)
     quantity: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     total_amount: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
