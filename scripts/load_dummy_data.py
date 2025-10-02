@@ -38,7 +38,12 @@ def load_dummy_data(session: Session) -> None:
     session.flush()
 
     purchases = [
-        Purchase(customer_id=customers[0].id, item_id=items[0].id, quantity=1, total_amount=items[0].price),
+        Purchase(
+            customer_id=customers[0].id,
+            item_id=items[0].id,
+            quantity=1,
+            total_amount=items[0].price,
+        ),
         Purchase(
             customer_id=customers[0].id,
             item_id=items[2].id,
