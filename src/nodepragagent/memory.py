@@ -1,8 +1,13 @@
-from typing import Any, Protocol, runtime_checkable
+from typing import Any
 from dataclasses import dataclass
 import json
-from openai.types.chat import ChatCompletionMessageFunctionToolCall
-from .utils import MessageRole
+from openai.types.chat import (
+    ChatCompletionAssistantMessageParam,
+    ChatCompletionMessageFunctionToolCall,
+    ChatCompletionSystemMessageParam,
+    ChatCompletionToolMessageParam,
+    ChatCompletionUserMessageParam,
+)
 
 
 def make_json_serializable(obj: Any) -> Any:
@@ -35,43 +40,35 @@ def make_json_serializable(obj: Any) -> Any:
         # For any other type, convert to string
         return str(obj)
 
-@dataclass
-class ChatMessage:
-    content: str = ""
-    role: MessageRole
 
-    def as_dict(self) -> dict[str, str]:
-        return {"role": self.role.value, "content": self.content}
+def system_message(content: str) -> ChatCompletionSystemMessageParam:
+    return ChatCompletionSystemMessageParam(role="system", content=content)
 
-@dataclass
-class AssistantMessage(ChatMessage):
-    role = MessageRole.ASSISTANT
 
-@dataclass
-class SystemMessage(ChatMessage):
-    role = MessageRole.SYSTEM
+def user_message(content: str) -> ChatCompletionUserMessageParam:
+    return ChatCompletionUserMessageParam(role="user", content=content)
 
-@dataclass
-class UserMessage(ChatMessage):
-    role = MessageRole.USER
-    
-@dataclass
-class ToolCall(ChatMessage):
+
+def assistant_message(content: str) -> ChatCompletionAssistantMessageParam:
+    return ChatCompletionAssistantMessageParam(role="assistant", content=content)
+
+
+@dataclass(kw_only=True)
+class ToolCall:
     name: str
     arguments: Any
     id: str
-    role: MessageRole = MessageRole.ASSISTANT
 
-    def as_dict(self):
+    def as_message_param(self) -> ChatCompletionAssistantMessageParam:
         serialized_arguments = (
             self.arguments
             if isinstance(self.arguments, str)
             else json.dumps(make_json_serializable(self.arguments))
         )
 
-        return {
-            "role": self.role.value,
-            "tool_calls": [
+        return ChatCompletionAssistantMessageParam(
+            role="assistant",
+            tool_calls=[
                 {
                     "id": self.id,
                     "type": "function",
@@ -81,12 +78,10 @@ class ToolCall(ChatMessage):
                     },
                 }
             ],
-        }
+        )
 
     @classmethod
-    def from_openai_tool_call(
-        cls, tool_call: ChatCompletionMessageFunctionToolCall
-    ) -> "ToolCall":
+    def from_openai_tool_call(cls, tool_call: ChatCompletionMessageFunctionToolCall) -> "ToolCall":
         """Convert OpenAI's tool call structure into our serialized form."""
 
         return cls(
@@ -96,21 +91,20 @@ class ToolCall(ChatMessage):
         )
 
 
-@dataclass
-class ToolMessage(ChatMessage):
+@dataclass(kw_only=True)
+class ToolMessage:
     tool_call_id: str
     content: Any
-    role: MessageRole = MessageRole.TOOL
 
-    def as_dict(self) -> dict[str, Any]:
+    def as_message_param(self) -> ChatCompletionToolMessageParam:
         serialized_content = (
             self.content
             if isinstance(self.content, str)
             else json.dumps(make_json_serializable(self.content))
         )
 
-        return {
-            "role": self.role.value,
-            "tool_call_id": self.tool_call_id,
-            "content": serialized_content,
-        }
+        return ChatCompletionToolMessageParam(
+            role="tool",
+            tool_call_id=self.tool_call_id,
+            content=serialized_content,
+        )

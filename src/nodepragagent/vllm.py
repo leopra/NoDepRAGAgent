@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Sequence
@@ -11,12 +12,18 @@ from openai.types.chat import (
     ChatCompletionMessageParam,
     ChatCompletionFunctionToolParam,
     ChatCompletionMessageFunctionToolCall,
-    ChatCompletionToolParam,
 )
 from .db import schema_summary
-from .memory import ToolCall, ToolMessage, ChatMessage
+from .memory import (
+    ToolCall,
+    ToolMessage,
+    assistant_message,
+    system_message,
+    user_message,
+)
 from .tools import FINAL_ANSWER_TOOL, OPENAI_CHAT_TOOLS, TOOLS
 from .utils import _tool_name
+from .config import VLLMConfig
 
 EventPayload = Dict[str, Any]
 EventReporter = Callable[[str, EventPayload], None]
@@ -24,16 +31,6 @@ EventReporter = Callable[[str, EventPayload], None]
 MAX_ITERATIONS = 3
 
 FINAL_ANSWER_TOOL_NAME = "final_answer"
-
-
-@dataclass(frozen=True)
-class VLLMConfig:
-    """Configuration for connecting to a local vLLM server."""
-
-    base_url: str = "http://localhost:11434/v1"
-    api_key: str = "EMPTY"
-    model: str = "gpt-oss:20b"
-    
 
 class VLLMClient:
     """Thin wrapper around the OpenAI client so we can mock responses in tests."""
@@ -54,8 +51,12 @@ class VLLMClient:
             "When SQL is appropriate, call `query_postgres` with a well-formed query against the following schema:\n"
             f"{schema_summary()}"
             "If you encounter an error analyze it and retry."
+            "Don't make up any information, only use information you retrieved from SQL or the Vector Database to answer the question."
         )
-        self.history: List[ChatMessage] = [ChatMessage.system(schema_message)]
+        self.history: List[ChatCompletionMessageParam] = [
+            system_message(schema_message)
+        ]
+        self.tool_call_records: List[ToolCall] = []
 
     async def generate(
         self,
@@ -69,7 +70,7 @@ class VLLMClient:
         """Generate a chat completion using the vLLM-backed OpenAI API."""
 
         if system_prompt:
-            self.history.append(ChatMessage.system(system_prompt))
+            self.history.append(system_message(system_prompt))
 
         res = await self.generate_from_messages(
             prompt,
@@ -95,7 +96,7 @@ class VLLMClient:
                 "message": message,
             },
         )
-        self.history.append(ChatMessage.user(message))
+        self.history.append(user_message(message))
 
         tool_spec = list(tools) if tools is not None else list(OPENAI_CHAT_TOOLS)
 
@@ -117,7 +118,7 @@ class VLLMClient:
 
             response = await self._client.chat.completions.create(
                 model=self.config.model,
-                messages=[m.as_dict() for m in self.history],
+                messages=self.history,
                 temperature=temperature,
                 max_tokens=max_tokens,
                 tools=tool_spec,
@@ -128,7 +129,7 @@ class VLLMClient:
                 "model_response_received",
                 {
                     "iteration": it + 1,
-                    "response_id": getattr(response, "id", None),
+                    "response_reasoning": response.model_extra.get("reasoning", None),
                 },
             )
 
@@ -142,7 +143,7 @@ class VLLMClient:
                             "content": msg.content,
                         },
                     )
-                    self.history.append(ChatMessage.assistant(msg.content))
+                    self.history.append(assistant_message(msg.content))
                 elif msg.tool_calls:
                     for tool_call in msg.tool_calls:
                         assert isinstance(tool_call, ChatCompletionMessageFunctionToolCall)
@@ -153,7 +154,9 @@ class VLLMClient:
                             arguments = raw_arguments
 
                         tool_name = tool_call.function.name
-                        self.history.append(ToolCall.from_openai_tool_call(tool_call))
+                        tool_call_record = ToolCall.from_openai_tool_call(tool_call)
+                        self.tool_call_records.append(tool_call_record)
+                        self.history.append(tool_call_record.as_message_param())
 
                         self._report(
                             "tool_call",
@@ -172,14 +175,16 @@ class VLLMClient:
                         elif not isinstance(arguments, dict):
                             tool_response = {"error": "Tool arguments must be a JSON object."}
                         else:
-                            tool_response = callback(**arguments)
-
-                        self.history.append(
-                            ToolMessage(
-                                tool_call_id=tool_call.id,
-                                content=tool_response,
+                            result = callback(**arguments)
+                            tool_response = (
+                                await result if inspect.isawaitable(result) else result
                             )
+
+                        tool_message = ToolMessage(
+                            tool_call_id=tool_call.id,
+                            content=tool_response,
                         )
+                        self.history.append(tool_message.as_message_param())
 
                         self._report(
                             "tool_result",
@@ -210,7 +215,7 @@ class VLLMClient:
                 "iterations": MAX_ITERATIONS,
             },
         )
-        return self.history[-1]
+        return json.dumps(self.history[-1])
 
     def _report(self, event: str, payload: EventPayload) -> None:
         if self._reporter is not None:

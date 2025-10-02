@@ -4,22 +4,33 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Awaitable, Dict, List, Optional, Protocol, Union
 
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import SQLAlchemyError
+from weaviate.connect import ConnectionParams  # type: ignore[import-not-found]
 
 import weaviate  # type: ignore[import-untyped]
-from weaviate import AuthApiKey  # type: ignore[import-untyped]
+from weaviate.collections.classes.filters import Filter  # type: ignore[attr-defined]
+from weaviate.collections.classes.grpc import MetadataQuery  # type: ignore[attr-defined]
 from weaviate.exceptions import WeaviateBaseError
 
 from openai.types.chat import ChatCompletionFunctionToolParam
 from openai.types.shared_params import FunctionDefinition
-
 from .db import create_postgres_engine
+from .embeddings import embed_contents
 
 WEAVIATE_CLASS = "ProductInsight"
+
+
+ToolResponse = Dict[str, Any]
+
+
+class ToolCallback(Protocol):
+    """Callable protocol that supports synchronous or asynchronous execution."""
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Union[ToolResponse, Awaitable[ToolResponse]]: ...
 
 
 @dataclass(frozen=True)
@@ -29,7 +40,7 @@ class Tool:
     name: str
     description: str
     parameters: Dict[str, Any]
-    callback: Callable[..., Dict[str, Any]]
+    callback: ToolCallback
 
     def to_openai_tool(self) -> ChatCompletionFunctionToolParam:
         """Return the ChatCompletions tool specification for this tool."""
@@ -126,16 +137,33 @@ def query_postgres(*, sql: str, limit: int = 50) -> Dict[str, Any]:
         return {"rows": [], "error": str(exc)}
 
 
-def _weaviate_client() -> weaviate.Client:
+def _weaviate_client() -> weaviate.WeaviateAsyncClient:
     """Construct a Weaviate client from environment variables."""
 
     url = os.getenv("WEAVIATE_URL", "http://localhost:8080")
-    api_key = os.getenv("WEAVIATE_API_KEY")
-    auth = AuthApiKey(api_key) if api_key else None
-    return weaviate.Client(url=url, auth_client_secret=auth)
+    grpc_port_str = os.getenv("WEAVIATE_GRPC_PORT")
+    try:
+        grpc_port = int(grpc_port_str) if grpc_port_str else 50051
+    except ValueError as port_exc:
+        raise RuntimeError(
+            f"Invalid WEAVIATE_GRPC_PORT value: {grpc_port_str!r}"
+        ) from port_exc
+
+    grpc_secure = url.startswith("https://")
+
+    connection_params = ConnectionParams.from_url(
+        url,
+        grpc_port=grpc_port,
+        grpc_secure=grpc_secure,
+    )
+    return weaviate.WeaviateAsyncClient(
+        connection_params=connection_params,
+        auth_client_secret=None,
+        skip_init_checks=True,
+    )
 
 
-def query_weaviate(*, query: str, limit: int = 3, category: Optional[str] = None) -> Dict[str, Any]:
+async def query_weaviate(*, query: str, limit: int = 3, category: Optional[str] = None) -> Dict[str, Any]:
     """Query Weaviate for documents related to the supplied query string."""
 
     normalized_limit = max(1, min(limit, 10))
@@ -144,46 +172,58 @@ def query_weaviate(*, query: str, limit: int = 3, category: Optional[str] = None
         return {"results": [], "error": "Query string must not be empty."}
 
     client = _weaviate_client()
-    where_filter: Optional[Dict[str, Any]] = None
+
+    try:
+        query_vector = (await embed_contents([query]))[0]
+    except Exception as exc:
+        return {"results": [], "error": f"Failed to embed query: {exc}"}
+
+    try:
+        await client.connect()
+    except Exception as exc:  # pragma: no cover - connection issues
+        return {"results": [], "error": f"Failed to connect to Weaviate: {exc}"}
+
+    filters = None
     if category:
         normalized_category = category.strip()
         if normalized_category:
-            where_filter = {
-                "path": ["category"],
-                "operator": "Equal",
-                "valueText": normalized_category,
-            }
+            filters = Filter.by_property("category").equal(normalized_category)
 
     try:
-        weaviate_query = (
-            client.query.get(WEAVIATE_CLASS, ["title", "category", "content"])
-            .with_near_text({"concepts": [query]})
-            .with_limit(normalized_limit)
-            .with_additional(["distance", "certainty"])
+        collection = client.collections.get(WEAVIATE_CLASS)
+        query_result = await collection.query.near_vector(  # type: ignore[attr-defined]
+            near_vector=query_vector,
+            limit=normalized_limit,
+            filters=filters,
+            return_properties=["title", "category", "content"],
+            return_metadata=MetadataQuery(distance=True, certainty=True),
         )
-
-        if where_filter is not None:
-            weaviate_query = weaviate_query.with_where(where_filter)
-
-        response = weaviate_query.do()
     except WeaviateBaseError as exc:  # pragma: no cover - network errors
         return {"results": [], "error": str(exc)}
     except Exception as exc:  # pragma: no cover - unexpected errors
         return {"results": [], "error": str(exc)}
-
-    hits: List[Dict[str, Any]] = response.get("data", {}).get("Get", {}).get(WEAVIATE_CLASS, [])
+    finally:
+        try:
+            await client.close()
+        except Exception:  # pragma: no cover - best-effort cleanup
+            pass
 
     documents = []
-    for hit in hits:
-        additional = hit.get("_additional", {})
+    for obj in getattr(query_result, "objects", []):
+        properties = getattr(obj, "properties", {}) or {}
+        metadata = getattr(obj, "metadata", None)
+        additional = {
+            "distance": getattr(metadata, "distance", None),
+            "certainty": getattr(metadata, "certainty", None),
+        }
         documents.append(
             {
-                "title": hit.get("title"),
-                "category": hit.get("category"),
-                "content": hit.get("content"),
+                "title": properties.get("title"),
+                "category": properties.get("category"),
+                "content": properties.get("content"),
                 "score": _semantic_score(additional),
-                "distance": additional.get("distance"),
-                "certainty": additional.get("certainty"),
+                "distance": additional["distance"],
+                "certainty": additional["certainty"],
             }
         )
 
@@ -285,13 +325,13 @@ FINAL_ANSWER_TOOL = Tool(
 )
 
 ALL_TOOLS: tuple[Tool, ...] = (
-    SUM_TWO_NUMBERS_TOOL,
+    # SUM_TWO_NUMBERS_TOOL,
     QUERY_POSTGRES_TOOL,
     QUERY_WEAVIATE_TOOL,
     FINAL_ANSWER_TOOL,
 )
 
-TOOLS: dict[str, Callable[..., Dict[str, Any]]] = {tool.name: tool.callback for tool in ALL_TOOLS}
+TOOLS: dict[str, ToolCallback] = {tool.name: tool.callback for tool in ALL_TOOLS}
 
 OPENAI_CHAT_TOOLS: tuple[ChatCompletionFunctionToolParam, ...] = tuple(
     tool.to_openai_tool() for tool in ALL_TOOLS

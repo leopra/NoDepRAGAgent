@@ -2,34 +2,23 @@
 
 from __future__ import annotations
 
-import os
-from typing import Iterable, Sequence
+import asyncio
 
-import weaviate  # type: ignore[import-untyped]
-from weaviate import AuthApiKey  # type: ignore[import-untyped]
+import weaviate
 from weaviate.exceptions import WeaviateBaseError
+
+from nodepragagent.embeddings import embed_contents
+from nodepragagent.tools import _weaviate_client
+from nodepragagent.vllm import VLLMConfig
 
 CLASS_NAME = "ProductInsight"
 
 
-def _client() -> weaviate.Client:
-    url = os.getenv("WEAVIATE_URL", "http://localhost:8080")
-    api_key = os.getenv("WEAVIATE_API_KEY")
-    auth = AuthApiKey(api_key) if api_key else None
-    return weaviate.Client(url=url, auth_client_secret=auth)
+async def _reset_schema(client: weaviate.WeaviateAsyncClient) -> None:
+    if await client.collections.exists(CLASS_NAME):
+        await client.collections.delete(CLASS_NAME)
 
-
-def _class_exists(client: weaviate.Client, class_name: str) -> bool:
-    schema = client.schema.get()
-    classes: Iterable[dict] = schema.get("classes", []) or []
-    return any(cls.get("class") == class_name for cls in classes)
-
-
-def _reset_schema(client: weaviate.Client) -> None:
-    if _class_exists(client, CLASS_NAME):
-        client.schema.delete_class(CLASS_NAME)
-
-    client.schema.create_class(
+    await client.collections.create_from_dict(
         {
             "class": CLASS_NAME,
             "description": "Product catalogue facts and company economic notes",
@@ -51,8 +40,9 @@ def _reset_schema(client: weaviate.Client) -> None:
     )
 
 
-def _documents() -> tuple[list[dict[str, str]], list[Sequence[float]]]:
-    docs = [
+
+def _documents() -> list[dict[str, str]]:
+    return [
         {
             "title": "Wireless Mouse Overview",
             "category": "item",
@@ -97,33 +87,31 @@ def _documents() -> tuple[list[dict[str, str]], list[Sequence[float]]]:
         },
     ]
 
-    vectors: list[Sequence[float]] = [
-        [0.12, 0.31, 0.08],
-        [0.15, 0.28, 0.11],
-        [0.18, 0.22, 0.14],
-        [0.11, 0.34, 0.06],
-        [0.42, 0.17, 0.29],
-    ]
-    return docs, vectors
 
-
-def _load_documents(client: weaviate.Client) -> None:
-    docs, vectors = _documents()
-    client.batch.configure(batch_size=5)
-    with client.batch as batch:  # type: ignore[attr-defined]
-        for doc, vector in zip(docs, vectors, strict=True):
-            batch.add_data_object(doc, CLASS_NAME, vector=vector)
-
-
-def main() -> None:
-    client = _client()
+async def _load_documents(client: weaviate.WeaviateAsyncClient) -> None:
+    docs = _documents()
     try:
-        _reset_schema(client)
-        _load_documents(client)
+        vectors = await embed_contents((doc["content"] for doc in docs), config=VLLMConfig())
+    except Exception as exc:  # pragma: no cover - embedding request failure
+        raise SystemExit(f"Failed to compute embeddings: {exc}")
+
+    collection = client.collections.get(CLASS_NAME)
+    for doc, vector in zip(docs, vectors, strict=True):
+        await collection.data.insert(doc, vector=vector)
+
+
+async def _main_async() -> None:
+    client = _weaviate_client()
+    try:
+        await client.connect()
+        await _reset_schema(client)
+        await _load_documents(client)
     except WeaviateBaseError as exc:
         raise SystemExit(f"Failed to load documents: {exc}")
+    finally:
+        await client.close()
     print("Dummy documents loaded into Weaviate.")
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(_main_async())

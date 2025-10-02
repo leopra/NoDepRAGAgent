@@ -22,7 +22,7 @@ dependencies = [
     "pytest>=8.4.2",
     "sqlalchemy>=2.0.43",
     "weaviate>=0.1.2",
-    "weaviate-client>=3.25.0,<4.0.0",
+    "weaviate-client>=4.0.0",
 ]
 
 [project.optional-dependencies]
