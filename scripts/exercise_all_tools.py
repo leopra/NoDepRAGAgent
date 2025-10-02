@@ -32,6 +32,8 @@ async def _exercise_tools() -> None:
     except Exception as exc:  # pragma: no cover - network issues are environment specific
         print(f"Model call failed: {exc}")
         return
+    finally:
+        await client.aclose()
 
     tool_calls = client.tool_call_records
     observed = {call.name for call in tool_calls}

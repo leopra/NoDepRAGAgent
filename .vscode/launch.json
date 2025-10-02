@@ -10,7 +10,7 @@
       "cwd": "${workspaceFolder}",
       "envFile": "${workspaceFolder}/.env",
       "justMyCode": false,
-      "args": "what did Alice buy"
+      "args": "what are the company earnings for Q2"
     }
   ]
 }

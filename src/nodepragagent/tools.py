@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from dataclasses import dataclass
 from typing import Any, Awaitable, Dict, List, Optional, Protocol, Union
 
@@ -90,6 +91,39 @@ def final_answer(*, answer: str, sources: Optional[List[str]] = None) -> Dict[st
     return payload
 
 
+def request_user_input(*, prompt: str, allow_empty: bool = False) -> Dict[str, Any]:
+    """Prompt the end user for additional input and return their response."""
+
+    question = prompt.strip() or "Please provide additional information:"
+
+    if not sys.stdin.isatty():
+        return {
+            "response": None,
+            "error": "Interactive input is unavailable in the current execution context.",
+        }
+
+    try:
+        answer = input(f"{question}\n> ")
+    except EOFError:
+        return {
+            "response": None,
+            "error": "Input stream closed while waiting for user response.",
+        }
+    except KeyboardInterrupt:
+        return {
+            "response": None,
+            "error": "User cancelled the input request.",
+        }
+
+    if not allow_empty and not answer.strip():
+        return {
+            "response": answer,
+            "error": "User response was empty.",
+        }
+
+    return {"response": answer}
+
+
 def _postgres_engine() -> Engine:
     """Create a SQLAlchemy engine for Postgres using environment variables."""
 
@@ -138,24 +172,13 @@ def query_postgres(*, sql: str, limit: int = 50) -> Dict[str, Any]:
 
 
 def _weaviate_client() -> weaviate.WeaviateAsyncClient:
-    """Construct a Weaviate client from environment variables."""
+    """Construct a Weaviate client from environment variables, REST-only (no gRPC)."""
 
     url = os.getenv("WEAVIATE_URL", "http://localhost:8080")
-    grpc_port_str = os.getenv("WEAVIATE_GRPC_PORT")
-    try:
-        grpc_port = int(grpc_port_str) if grpc_port_str else 50051
-    except ValueError as port_exc:
-        raise RuntimeError(
-            f"Invalid WEAVIATE_GRPC_PORT value: {grpc_port_str!r}"
-        ) from port_exc
 
-    grpc_secure = url.startswith("https://")
+    # Only use REST (don’t specify gRPC)
+    connection_params = ConnectionParams.from_url(url, grpc_port=50051)
 
-    connection_params = ConnectionParams.from_url(
-        url,
-        grpc_port=grpc_port,
-        grpc_secure=grpc_secure,
-    )
     return weaviate.WeaviateAsyncClient(
         connection_params=connection_params,
         auth_client_secret=None,
@@ -184,10 +207,11 @@ async def query_weaviate(*, query: str, limit: int = 3, category: Optional[str] 
         return {"results": [], "error": f"Failed to connect to Weaviate: {exc}"}
 
     filters = None
-    if category:
-        normalized_category = category.strip()
-        if normalized_category:
-            filters = Filter.by_property("category").equal(normalized_category)
+    #TODO disabled category for now
+    # if category:
+    #     normalized_category = category.strip()
+    #     if normalized_category:
+    #         filters = Filter.by_property("category").equal(normalized_category)
 
     try:
         collection = client.collections.get(WEAVIATE_CLASS)
@@ -203,10 +227,8 @@ async def query_weaviate(*, query: str, limit: int = 3, category: Optional[str] 
     except Exception as exc:  # pragma: no cover - unexpected errors
         return {"results": [], "error": str(exc)}
     finally:
-        try:
-            await client.close()
-        except Exception:  # pragma: no cover - best-effort cleanup
-            pass
+        await client.close()
+
 
     documents = []
     for obj in getattr(query_result, "objects", []):
@@ -324,11 +346,36 @@ FINAL_ANSWER_TOOL = Tool(
     callback=final_answer,
 )
 
+REQUEST_USER_INPUT_TOOL = Tool(
+    name="request_user_input",
+    description=(
+        "Ask the end user for additional information when the current context is insufficient "
+        "to continue."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "prompt": {
+                "type": "string",
+                "description": "Question that should be shown directly to the user.",
+            },
+            "allow_empty": {
+                "type": "boolean",
+                "description": "Allow an empty response to be treated as valid input.",
+                "default": False,
+            },
+        },
+        "required": ["prompt"],
+    },
+    callback=request_user_input,
+)
+
 ALL_TOOLS: tuple[Tool, ...] = (
     # SUM_TWO_NUMBERS_TOOL,
     QUERY_POSTGRES_TOOL,
     QUERY_WEAVIATE_TOOL,
     FINAL_ANSWER_TOOL,
+    REQUEST_USER_INPUT_TOOL,
 )
 
 TOOLS: dict[str, ToolCallback] = {tool.name: tool.callback for tool in ALL_TOOLS}

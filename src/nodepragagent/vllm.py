@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import inspect
 import json
+from types import TracebackType
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Sequence
 
@@ -28,7 +29,7 @@ from .config import VLLMConfig
 EventPayload = Dict[str, Any]
 EventReporter = Callable[[str, EventPayload], None]
 
-MAX_ITERATIONS = 3
+MAX_ITERATIONS = 10
 
 FINAL_ANSWER_TOOL_NAME = "final_answer"
 
@@ -52,6 +53,9 @@ class VLLMClient:
             f"{schema_summary()}"
             "If you encounter an error analyze it and retry."
             "Don't make up any information, only use information you retrieved from SQL or the Vector Database to answer the question."
+            "Once you have the final answer call the final_answer tool, do not answer in any other way."
+            "Make sure that the tool inputs are always json parsable, do not forget double quotes or parentesys."
+            "Before asking questions to the user search for answers to the question and then reason if you need more information to answer."
         )
         self.history: List[ChatCompletionMessageParam] = [
             system_message(schema_message)
@@ -86,7 +90,7 @@ class VLLMClient:
         message: str,
         *,
         temperature: float = 0.0,
-        max_tokens: int = 512,
+        max_tokens: int = 2048,
         tools: Sequence[ChatCompletionFunctionToolParam] | None = None,
     ) -> str:
         """Generate a completion using an explicit message history."""

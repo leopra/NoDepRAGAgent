@@ -49,9 +49,6 @@ def _cli_event_printer(event: str, payload: dict[str, object]) -> None:
         tool_name = payload.get("tool_name", "unknown")
         result = _format_payload(payload.get("response"))
         print(f"{prefix}Tool< {tool_name}\n{result}")
-    elif event == "final_answer":
-        result = _format_payload(payload.get("response"))
-        print(f"{prefix}Final> {result}")
     elif event == "model_response_received":
         response_id = payload.get("response_id")
         if response_id:
@@ -105,7 +102,7 @@ async def main(argv: Sequence[str] | None = None) -> None:
             response = await client.generate_from_messages(
                 prompt,
                 temperature=1,
-                max_tokens=164,
+                max_tokens=2048,
                 tools=list(OPENAI_CHAT_TOOLS),
             )
         except Exception as exc:  # pragma: no cover - network errors not deterministic in tests
@@ -116,7 +113,6 @@ async def main(argv: Sequence[str] | None = None) -> None:
 
         if prompt_arg is not None:
             return
-
 
 if __name__ == "__main__":  # pragma: no cover
     asyncio.run(main())
