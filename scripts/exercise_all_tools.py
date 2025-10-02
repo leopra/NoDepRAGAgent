@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import asyncio
 
-from nodepragagent.memory import ToolCall
 from nodepragagent.tools import OPENAI_CHAT_TOOLS
 from nodepragagent.vllm import VLLMClient
 
@@ -34,9 +33,7 @@ async def _exercise_tools() -> None:
         print(f"Model call failed: {exc}")
         return
 
-    tool_calls: list[ToolCall] = [
-        item for item in client.history if isinstance(item, ToolCall)
-    ]
+    tool_calls = client.tool_call_records
     observed = {call.name for call in tool_calls}
 
     print("Final assistant response:\n")

@@ -2,7 +2,6 @@
 
 import asyncio
 import json
-import logging
 import sys
 from typing import Iterable, Sequence
 
@@ -10,41 +9,55 @@ from .tools import OPENAI_CHAT_TOOLS
 from .vllm import VLLMClient, VLLMConfig
 
 
-class _ExtraFormatter(logging.Formatter):
-    """Formatter that renders arbitrary `extra` fields as JSON."""
+def _format_payload(payload: object) -> str:
+    """Render tool arguments or responses for CLI output."""
 
-    _STANDARD_ATTRS = {
-        "name",
-        "msg",
-        "args",
-        "levelname",
-        "levelno",
-        "pathname",
-        "filename",
-        "module",
-        "exc_info",
-        "exc_text",
-        "stack_info",
-        "lineno",
-        "funcName",
-        "created",
-        "msecs",
-        "relativeCreated",
-        "thread",
-        "threadName",
-        "processName",
-        "process",
-        "message",
-        "asctime",
-        "extras",
-    }
+    if isinstance(payload, str):
+        return payload
 
-    def format(self, record: logging.LogRecord) -> str:
-        extras = {
-            key: value for key, value in vars(record).items() if key not in self._STANDARD_ATTRS
-        }
-        record.extras = json.dumps(extras, default=str) if extras else "{}"
-        return super().format(record)
+    try:
+        return json.dumps(payload, indent=2, sort_keys=True)
+    except (TypeError, ValueError):
+        return str(payload)
+
+
+def _cli_event_printer(event: str, payload: dict[str, object]) -> None:
+    """Print VLLM client events in a human-friendly format."""
+
+    iteration = payload.get("iteration")
+    prefix = f"[iter {iteration}] " if iteration is not None else ""
+
+    if event == "user_message":
+        return
+    if event == "model_request":
+        tools = payload.get("tools") or []
+        if isinstance(tools, (list, tuple)):
+            tool_list = ", ".join(str(tool) for tool in tools)
+        else:
+            tool_list = str(tools)
+        print(f"{prefix}-> calling model with tools: {tool_list}")
+    elif event == "model_response":
+        content = payload.get("content", "")
+        print(f"{prefix}Model> {content}")
+    elif event == "tool_call":
+        tool_name = payload.get("tool_name", "unknown")
+        args = _format_payload(payload.get("arguments"))
+        tool_id = payload.get("tool_call_id")
+        suffix = f" (id: {tool_id})" if tool_id else ""
+        print(f"{prefix}Tool> {tool_name}{suffix}\n{args}")
+    elif event == "tool_result":
+        tool_name = payload.get("tool_name", "unknown")
+        result = _format_payload(payload.get("response"))
+        print(f"{prefix}Tool< {tool_name}\n{result}")
+    elif event == "final_answer":
+        result = _format_payload(payload.get("response"))
+        print(f"{prefix}Final> {result}")
+    elif event == "model_response_received":
+        response_id = payload.get("response_id")
+        if response_id:
+            print(f"{prefix}<-- model response id: {response_id}")
+    elif event == "max_iterations_reached":
+        print("[warn] Maximum iterations reached without final answer")
 
 
 def _prompt_lines() -> Iterable[str]:
@@ -71,12 +84,6 @@ def _prompt_lines() -> Iterable[str]:
 async def main(argv: Sequence[str] | None = None) -> None:
     """Run the RAG agent CLI loop."""
 
-    handler = logging.StreamHandler()
-    handler.setFormatter(
-        _ExtraFormatter("%(asctime)s %(levelname)s %(name)s %(message)s extras=%(extras)s")
-    )
-    logging.basicConfig(level=logging.INFO, handlers=[handler])
-
     prompt_arg: str | None = None
     if argv is None:
         argv = sys.argv[1:]
@@ -84,7 +91,7 @@ async def main(argv: Sequence[str] | None = None) -> None:
         prompt_arg = " ".join(str(part) for part in argv).strip() or None
 
     default_config = VLLMConfig()
-    client = VLLMClient(config=default_config)
+    client = VLLMClient(config=default_config, reporter=_cli_event_printer)
 
     prompt_source: Iterable[str]
     if prompt_arg is not None:

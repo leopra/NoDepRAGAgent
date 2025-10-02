@@ -36,7 +36,27 @@ def make_json_serializable(obj: Any) -> Any:
         return str(obj)
 
 @dataclass
-class ToolCall:
+class ChatMessage:
+    content: str = ""
+    role: MessageRole
+
+    def as_dict(self) -> dict[str, str]:
+        return {"role": self.role.value, "content": self.content}
+
+@dataclass
+class AssistantMessage(ChatMessage):
+    role = MessageRole.ASSISTANT
+
+@dataclass
+class SystemMessage(ChatMessage):
+    role = MessageRole.SYSTEM
+
+@dataclass
+class UserMessage(ChatMessage):
+    role = MessageRole.USER
+    
+@dataclass
+class ToolCall(ChatMessage):
     name: str
     arguments: Any
     id: str
@@ -77,7 +97,7 @@ class ToolCall:
 
 
 @dataclass
-class ToolMessage:
+class ToolMessage(ChatMessage):
     tool_call_id: str
     content: Any
     role: MessageRole = MessageRole.TOOL
