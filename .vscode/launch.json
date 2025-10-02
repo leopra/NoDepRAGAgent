@@ -10,7 +10,7 @@
       "cwd": "${workspaceFolder}",
       "envFile": "${workspaceFolder}/.env",
       "justMyCode": false,
-      "args": "what is 300 + 12891248, call the sum tool"
+      "args": "what did Alice buy"
     }
   ]
 }

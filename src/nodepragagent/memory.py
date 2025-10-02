@@ -1,6 +1,7 @@
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 from dataclasses import dataclass
 import json
+from openai.types.chat import ChatCompletionMessageFunctionToolCall
 from .utils import MessageRole
 
 
@@ -34,14 +35,12 @@ def make_json_serializable(obj: Any) -> Any:
         # For any other type, convert to string
         return str(obj)
 
-
 @dataclass
 class ToolCall:
     name: str
     arguments: Any
     id: str
     role: MessageRole = MessageRole.ASSISTANT
-
 
     def as_dict(self):
         serialized_arguments = (
@@ -62,4 +61,36 @@ class ToolCall:
                     },
                 }
             ],
+        }
+
+    @classmethod
+    def from_openai_tool_call(
+        cls, tool_call: ChatCompletionMessageFunctionToolCall
+    ) -> "ToolCall":
+        """Convert OpenAI's tool call structure into our serialized form."""
+
+        return cls(
+            name=tool_call.function.name,
+            arguments=tool_call.function.arguments,
+            id=tool_call.id,
+        )
+
+
+@dataclass
+class ToolMessage:
+    tool_call_id: str
+    content: Any
+    role: MessageRole = MessageRole.TOOL
+
+    def as_dict(self) -> dict[str, Any]:
+        serialized_content = (
+            self.content
+            if isinstance(self.content, str)
+            else json.dumps(make_json_serializable(self.content))
+        )
+
+        return {
+            "role": self.role.value,
+            "tool_call_id": self.tool_call_id,
+            "content": serialized_content,
         }

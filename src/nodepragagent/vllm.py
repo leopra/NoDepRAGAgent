@@ -5,44 +5,27 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
-from enum import Enum
-from typing import Any, List, Sequence
+from typing import Any, List, Sequence, cast
 
 from openai import AsyncOpenAI
 from openai.types.chat import (
+    ChatCompletionMessageParam,
     ChatCompletionFunctionToolParam,
     ChatCompletionMessageFunctionToolCall,
+    ChatCompletionToolParam,
 )
 
 from .db import schema_summary
-from .memory import ToolCall
+from .logging_utils import log_operation
+from .memory import SerializableMessage, ToolCall, ToolMessage
 from .tools import FINAL_ANSWER_TOOL, OPENAI_CHAT_TOOLS, TOOLS
-from .utils import MessageRole
+from .utils import MessageRole, _tool_name
 
 logger = logging.getLogger(__name__)
 
 MAX_ITERATIONS = 3
 
 FINAL_ANSWER_TOOL_NAME = "final_answer"
-
-
-def _tool_name(tool: ChatCompletionFunctionToolParam) -> str:
-    """Best-effort extraction of a tool name from the OpenAI tool descriptor."""
-
-    function = getattr(tool, "function", None)
-    if function is not None and hasattr(function, "name"):
-        name = getattr(function, "name", "")
-        if isinstance(name, str):
-            return name
-
-    if isinstance(tool, dict):
-        function_dict = tool.get("function")
-        if isinstance(function_dict, dict):
-            name = function_dict.get("name")
-            if isinstance(name, str):
-                return name
-
-    return ""
 
 
 @dataclass(frozen=True)
@@ -55,22 +38,25 @@ class VLLMConfig:
 
 
 @dataclass(frozen=True)
-class UserMessage:
+class ChatMessage:
     content: str
-    role: MessageRole = MessageRole.USER
+    role: MessageRole
 
     def as_dict(self) -> dict[str, str]:
         return {"role": self.role.value, "content": self.content}
 
+    @classmethod
+    def user(cls, content: str) -> "ChatMessage":
+        return cls(content=content, role=MessageRole.USER)
 
-@dataclass(frozen=True)
-class AssistantMessage:
-    content: str
-    role: MessageRole = MessageRole.ASSISTANT
+    @classmethod
+    def assistant(cls, content: str) -> "ChatMessage":
+        return cls(content=content, role=MessageRole.ASSISTANT)
 
-    def as_dict(self) -> dict[str, str]:
-        return {"role": self.role.value, "content": self.content}
-
+    @classmethod
+    def system(cls, content: str) -> "ChatMessage":
+        return cls(content=content, role=MessageRole.SYSTEM)
+    
 
 class VLLMClient:
     """Thin wrapper around the OpenAI client so we can mock responses in tests."""
@@ -81,14 +67,12 @@ class VLLMClient:
             base_url=self.config.base_url, api_key=self.config.api_key
         )
         schema_message = (
-            "Database Schema\n"
             "Choose between the `query_postgres` SQL tool and the `query_weaviate` vector search tool, or call both if needed to fully answer the request.\n"
             "When SQL is appropriate, call `query_postgres` with a well-formed query against the following schema:\n"
             f"{schema_summary()}"
+            "If you encounter an error analyze it and retry."
         )
-        self.history: List[Any] = [  # TODO fix typing
-            {"role": "system", "content": schema_message}
-        ]
+        self.history: List[SerializableMessage] = [ChatMessage.system(schema_message)]
 
     async def generate(
         self,
@@ -102,7 +86,7 @@ class VLLMClient:
         """Generate a chat completion using the vLLM-backed OpenAI API."""
 
         if system_prompt:
-            self.history.append({"role": "system", "content": system_prompt})
+            self.history.append(ChatMessage.system(system_prompt))
 
         res = await self.generate_from_messages(
             prompt,
@@ -124,7 +108,7 @@ class VLLMClient:
         """Generate a completion using an explicit message history."""
 
         logger.info("Received user message", extra={"user_message": message})
-        self.history.append(UserMessage(message).as_dict())
+        self.history.append(ChatMessage.user(message))
 
         tool_spec = list(tools) if tools is not None else list(OPENAI_CHAT_TOOLS)
 
@@ -133,25 +117,33 @@ class VLLMClient:
 
         it = 0
         while it < MAX_ITERATIONS:
-            logger.info(
-                "Dispatching chat completion request",
-                extra={
+            tool_names = [_tool_name(t) for t in tool_spec]
+            with log_operation(
+                logger=logger,
+                start_message="Dispatching chat completion request",
+                success_message="Chat completion response received",
+                failure_message="Chat completion request failed",
+                base_extra={
                     "iteration": it + 1,
                     "temperature": temperature,
                     "max_tokens": max_tokens,
-                    "tools": [
-                        _tool_name(t) for t in tool_spec
-                    ],  # TODO cleanup
+                    "tools": tool_names,
                 },
-            )
-            response = await self._client.chat.completions.create(
-                model=self.config.model,
-                messages=self.history,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                tools=tool_spec,
-                tool_choice="auto",
-            )
+                success_extra_fn=lambda resp: (
+                    {"response_id": getattr(resp, "id")}
+                    if getattr(resp, "id", None) is not None
+                    else {}
+                ),
+            ) as completion_log:
+                response = await self._client.chat.completions.create(
+                    model=self.config.model,
+                    messages=[m.as_dict() for m in self.history],
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    tools=tool_spec,
+                    tool_choice="auto",
+                )
+                response = completion_log.record_response(response)
 
             for choice in response.choices:
                 msg = choice.message
@@ -160,7 +152,7 @@ class VLLMClient:
                         "Assistant response received",
                         extra={"response": msg.content, "iteration": it + 1},
                     )
-                    self.history.append(AssistantMessage(msg.content).as_dict())
+                    self.history.append(ChatMessage.assistant(msg.content))
                 elif msg.tool_calls:
                     for tool_call in msg.tool_calls:
                         assert isinstance(tool_call, ChatCompletionMessageFunctionToolCall)
@@ -171,58 +163,47 @@ class VLLMClient:
                             arguments = raw_arguments
 
                         tool_name = tool_call.function.name
-                        self.history.append(
-                            ToolCall(
-                                name=tool_name,
-                                arguments=tool_call.function.arguments,
-                                id=tool_call.id,
-                            ).as_dict()
-                        )
-                        logger.info(
-                            "Tool call received",
-                            extra={
+                        with log_operation(
+                            logger=logger,
+                            start_message="Tool call received",
+                            success_message="Tool response ready",
+                            failure_message="Tool execution failed",
+                            base_extra={
                                 "tool_name": tool_name,
                                 "tool_call_id": tool_call.id,
+                                "iteration": it + 1,
                                 "arguments": arguments,
-                                "iteration": it + 1,
                             },
-                        )
-                        callback = TOOLS.get(tool_name)
+                            success_extra_fn=lambda response: {"response": response},
+                        ) as tool_log:
+                            self.history.append(ToolCall.from_openai_tool_call(tool_call))
+                            callback = TOOLS.get(tool_name)
 
-                        if callback is None:
-                            tool_response = {"error": f"Unknown tool: {tool_name}"}
-                        elif not isinstance(arguments, dict):
-                            tool_response = {"error": "Tool arguments must be a JSON object."}
-                        else:
-                            tool_response = callback(**arguments)
+                            if callback is None:
+                                tool_response = {"error": f"Unknown tool: {tool_name}"}
+                            elif not isinstance(arguments, dict):
+                                tool_response = {"error": "Tool arguments must be a JSON object."}
+                            else:
+                                tool_response = callback(**arguments)
 
-                        logger.info(
-                            "Tool response ready",
-                            extra={
-                                "tool_name": tool_name,
-                                "tool_call_id": tool_call.id,
-                                "response": tool_response,
-                                "iteration": it + 1,
-                            },
-                        )
-                        self.history.append(
-                            {
-                                "role": "tool",
-                                "tool_call_id": tool_call.id,
-                                "content": json.dumps(tool_response),
-                            }
-                        )
-
-                        if tool_name == FINAL_ANSWER_TOOL_NAME:
-                            logger.info(
-                                "Final answer tool triggered completion",
-                                extra={
-                                    "tool_call_id": tool_call.id,
-                                    "response": tool_response,
-                                    "iteration": it + 1,
-                                },
+                            tool_response = tool_log.record_response(tool_response)
+                            self.history.append(
+                                ToolMessage(
+                                    tool_call_id=tool_call.id,
+                                    content=tool_response,
+                                )
                             )
-                            return json.dumps(tool_response)
+
+                            if tool_name == FINAL_ANSWER_TOOL_NAME:
+                                logger.info(
+                                    "Final answer tool triggered completion",
+                                    extra={
+                                        "tool_call_id": tool_call.id,
+                                        "response": tool_response,
+                                        "iteration": it + 1,
+                                    },
+                                )
+                                return json.dumps(tool_response)
 
             it += 1
 

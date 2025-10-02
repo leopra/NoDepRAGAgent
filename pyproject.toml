@@ -18,6 +18,7 @@ classifiers = [
 dependencies = [
     "huggingface-hub>=0.35.1",
     "openai>=1.109.1",
+    "psycopg[binary]>=3.2.10",
     "pytest>=8.4.2",
     "sqlalchemy>=2.0.43",
     "weaviate>=0.1.2",

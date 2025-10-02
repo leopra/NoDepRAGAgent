@@ -2,40 +2,15 @@
 
 from __future__ import annotations
 
-import os
 from decimal import Decimal
 
-from sqlalchemy import create_engine, delete
+from sqlalchemy import delete
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from nodepragagent.db.models import Base, Customer, Item, Purchase
 
-
-def _ensure_sqlite_path(database_url: str) -> None:
-    """Create parent directories for SQLite files so the engine can initialize."""
-
-    if not database_url.startswith("sqlite"):
-        return
-
-    if database_url == "sqlite:///:memory:":
-        return
-
-    _, _, file_path = database_url.partition("///")
-    if not file_path:
-        return
-
-    directory = os.path.dirname(file_path)
-    if directory and not os.path.exists(directory):
-        os.makedirs(directory, exist_ok=True)
-
-
-def get_engine():
-    database_url = os.getenv(
-        "DATABASE_URL",
-        "sqlite:///data/rag.db",
-    )
-    _ensure_sqlite_path(database_url)
-    return create_engine(database_url, echo=False, future=True)
+from nodepragagent.tools import create_postgres_engine
 
 
 def load_dummy_data(session: Session) -> None:
@@ -95,11 +70,20 @@ def load_dummy_data(session: Session) -> None:
 
 
 def main() -> None:
-    engine = get_engine()
-    Base.metadata.create_all(engine)
-    with Session(engine) as session:
-        load_dummy_data(session)
-    print("Dummy data loaded successfully.")
+    engine: Session.bind.__class__ | None = None  # type: ignore[attr-defined]
+    try:
+        engine = create_postgres_engine()
+        Base.metadata.create_all(engine)
+        with Session(engine) as session:
+            load_dummy_data(session)
+    except SQLAlchemyError as exc:  # pragma: no cover - depends on external DB
+        raise SystemExit(f"Failed to load dummy data: {exc}")
+    finally:
+        if engine is not None:
+            engine.dispose()
+
+    db_url = engine.url.render_as_string(hide_password=True)
+    print(f"Dummy data loaded successfully into {db_url}.")
 
 
 if __name__ == "__main__":
