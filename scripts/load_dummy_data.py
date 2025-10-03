@@ -219,6 +219,8 @@ def main() -> None:
     engine: Session.bind.__class__ | None = None  # type: ignore[attr-defined]
     try:
         engine = create_postgres_engine()
+        # Rebuild the schema so older databases pick up new columns like Item.category_id.
+        Base.metadata.drop_all(engine)
         Base.metadata.create_all(engine)
         with Session(engine) as session:
             load_dummy_data(session)

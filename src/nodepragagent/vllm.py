@@ -5,6 +5,7 @@ import asyncio
 import functools
 import inspect
 import json
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Sequence
 
 from openai import AsyncOpenAI
@@ -21,6 +22,7 @@ from .memory import (
     assistant_message,
     system_message,
     user_message,
+    make_json_serializable,
 )
 from .tools import FINAL_ANSWER_TOOL, OPENAI_CHAT_TOOLS, TOOLS, FINAL_ANSWER_TOOL_NAME
 from .utils import _tool_name
@@ -58,6 +60,7 @@ class VLLMClient:
         self.history: List[ChatCompletionMessageParam] = [system_message(schema_message)]
         self.tool_call_records: List[ToolCall] = []
         self.is_final_answer = False
+        self.final_answer_payload: Any | None = None
 
     async def generate(
         self,
@@ -91,6 +94,8 @@ class VLLMClient:
         tools: Sequence[ChatCompletionFunctionToolParam] | None = None,
     ) -> str:
         """Generate a completion using an explicit message history."""
+        self.is_final_answer = False
+        self.final_answer_payload = None
         self._log_event("user_message", message=message)
         self.history.append(user_message(message))
 
@@ -136,7 +141,14 @@ class VLLMClient:
             it += 1
 
         self._log_event("max_iterations_reached", iterations=MAX_ITERATIONS)
-        return json.dumps(self.history[-1])
+
+        failure_message = {
+            "type": "error",
+            "reason": "max_iterations_reached",
+            "message": "LLM cannot find the answer to the user question.",
+        }
+        self.history.append(assistant_message(failure_message["message"]))
+        return json.dumps(failure_message)
 
     async def handle_tools(self, tool_calls: List[ChatCompletionMessageFunctionToolCall | ChatCompletionMessageCustomToolCall]) -> str | None:
         #TODO can I manage to get 2 tool calls in the same response?
@@ -188,8 +200,22 @@ class VLLMClient:
                     tool_call_id=tool_call.id,
                     response=tool_response,
                 )
-                self.is_final_answer = True
+        self.is_final_answer = True
         return None
+
+    def save_history(self, file_path: str | Path) -> None:
+        """Persist the collected interaction history to a JSON file."""
+
+        path = Path(file_path)
+        payload = {
+            "history": make_json_serializable(self.history),
+            "tool_calls": make_json_serializable(self.tool_call_records),
+            "is_final_answer": self.is_final_answer,
+            "final_answer_payload": make_json_serializable(self.final_answer_payload),
+        }
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("w", encoding="utf-8") as fp:
+            json.dump(payload, fp, indent=2)
 
     def _log_event(self, event: str, **payload: Any) -> None:
         self._report(event, payload)

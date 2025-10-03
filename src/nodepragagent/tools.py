@@ -232,17 +232,20 @@ async def query_weaviate(
         properties = getattr(obj, "properties", {}) or {}
         metadata = getattr(obj, "metadata", None)
         additional = {
-            "distance": getattr(metadata, "distance", None),
             "certainty": getattr(metadata, "certainty", None),
         }
+        certainty = additional["certainty"]
+        if certainty is not None:
+            try:
+                certainty = round(float(certainty), 2)
+            except (TypeError, ValueError):
+                certainty = additional["certainty"]
         documents.append(
             {
                 "title": properties.get("title"),
                 "category": properties.get("category"),
                 "content": properties.get("content"),
-                "score": _semantic_score(additional),
-                "distance": additional["distance"],
-                "certainty": additional["certainty"],
+                "certainty": certainty,
             }
         )
 

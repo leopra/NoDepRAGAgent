@@ -69,6 +69,8 @@ def cli_event_printer(event: str, payload: dict[str, Any]) -> None:
         print(f"{prefix}Tool> {tool_name}{suffix}\n{args}")
     elif event == "tool_result":
         tool_name = payload.get("tool_name", "unknown")
+        if tool_name == "final_answer":
+            return
         result = _format_payload(payload.get("response"))
         print(f"{prefix}Tool< {tool_name}\n{result}")
     elif event == "model_response_received":

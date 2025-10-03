@@ -1,14 +1,41 @@
 Choose between the `query_postgres` SQL tool and the `query_weaviate` vector search tool, or call both if needed to fully answer the request.
 When SQL is appropriate, call `query_postgres` with a well-formed query against the following schema:
+Table categories
+  - id INTEGER PRIMARY KEY NOT NULL
+  - name VARCHAR(80) NOT NULL
+
 Table customers
   - id INTEGER PRIMARY KEY NOT NULL
   - name VARCHAR(100) NOT NULL
   - email VARCHAR(255) NOT NULL
 
+Table suppliers
+  - id INTEGER PRIMARY KEY NOT NULL
+  - name VARCHAR(120) NOT NULL
+  - contact_email VARCHAR(255) NOT NULL
+
+Table customer_addresses
+  - id INTEGER PRIMARY KEY NOT NULL
+  - customer_id INTEGER NOT NULL REFERENCES customers.id
+  - label VARCHAR(50) NOT NULL
+  - street VARCHAR(255) NOT NULL
+  - city VARCHAR(120) NOT NULL
+  - state VARCHAR(120) NOT NULL
+  - postal_code VARCHAR(20) NOT NULL
+  - country VARCHAR(120) NOT NULL
+
 Table items
   - id INTEGER PRIMARY KEY NOT NULL
   - name VARCHAR(120) NOT NULL
   - price NUMERIC(10, 2) NOT NULL
+  - category_id INTEGER NULLABLE REFERENCES categories.id
+
+Table item_suppliers
+  - id INTEGER PRIMARY KEY NOT NULL
+  - item_id INTEGER NOT NULL REFERENCES items.id
+  - supplier_id INTEGER NOT NULL REFERENCES suppliers.id
+  - wholesale_price NUMERIC(10, 2) NOT NULL
+  - lead_time_days INTEGER NOT NULL DEFAULT 7
 
 Table purchases
   - id INTEGER PRIMARY KEY NOT NULL
@@ -16,7 +43,8 @@ Table purchases
   - item_id INTEGER NOT NULL REFERENCES items.id
   - quantity INTEGER NOT NULL DEFAULT 1
   - total_amount NUMERIC(10, 2) NOT NULL
-  - purchased_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT <function Purchase.<lambda> at 0x70cf6b449da0>
+  - purchased_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT <function Purchase.<lambda> at 0x7c01171762a0>
+  - shipping_address_id INTEGER NULLABLE REFERENCES customer_addresses.id
 If you encounter an error analyze it and retry.Don't make up any information, only use information you retrieved from SQL or the Vector Database to answer the question.
 Once you have the final answer call the final_answer tool, do not answer in any other way.
 Make sure that the tool inputs are always json parsable, do not forget double quotes or parentesys.

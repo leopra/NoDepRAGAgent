@@ -37,7 +37,15 @@ def schema_summary() -> str:
             type_repr = column.type.compile(dialect=dialect)
             nullability = "NOT NULL" if not column.nullable else "NULLABLE"
             default = column.default
-            default_repr = f" DEFAULT {default.arg}" if default is not None else ""
+            if default is not None:
+                # Try to get the default value using SQLAlchemy's API
+                try:
+                    default_value = default.arg if hasattr(default, "arg") else str(default)
+                except Exception:
+                    default_value = str(default)
+            else:
+                default_value = None
+            default_repr = f" DEFAULT {default_value}" if default_value is not None else ""
             pk_flag = " PRIMARY KEY" if column.primary_key else ""
             fk = next(iter(column.foreign_keys), None)
             fk_repr = f" REFERENCES {fk.target_fullname}" if fk is not None else ""

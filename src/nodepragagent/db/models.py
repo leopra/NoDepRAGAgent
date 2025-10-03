@@ -108,8 +108,14 @@ class ItemSupplier(Base):
     wholesale_price: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
     lead_time_days: Mapped[int] = mapped_column(Integer, nullable=False, default=7)
 
-    item: Mapped[Item] = relationship(back_populates="supplier_links")
-    supplier: Mapped[Supplier] = relationship(back_populates="item_links")
+    item: Mapped[Item] = relationship(
+        back_populates="supplier_links",
+        overlaps="suppliers,items",
+    )
+    supplier: Mapped[Supplier] = relationship(
+        back_populates="item_links",
+        overlaps="items,suppliers",
+    )
 
 
 class CustomerAddress(Base):

@@ -1,6 +1,7 @@
 """Command line entry point for interacting with the RAG agent."""
 
 import asyncio
+import argparse
 import sys
 from typing import Iterable, Sequence
 
@@ -33,11 +34,24 @@ def _prompt_lines() -> Iterable[str]:
 async def main(argv: Sequence[str] | None = None) -> None:
     """Run the RAG agent CLI loop."""
 
-    prompt_arg: str | None = None
+    parser = argparse.ArgumentParser(description="Interact with the NoDep RAG agent from the CLI")
+    parser.add_argument(
+        "prompt",
+        nargs="*",
+        help="Optional single turn prompt to run without starting the interactive loop",
+    )
+    parser.add_argument(
+        "--save-history",
+        dest="save_history",
+        metavar="PATH",
+        help="File path where the full conversation history will be stored as JSON",
+    )
+
     if argv is None:
         argv = sys.argv[1:]
-    if argv:
-        prompt_arg = " ".join(str(part) for part in argv).strip() or None
+
+    args = parser.parse_args(argv)
+    prompt_arg = " ".join(args.prompt).strip() if args.prompt else None
 
     default_config = VLLMConfig()
     client = VLLMClient(config=default_config, reporter=cli_event_printer)
@@ -63,8 +77,20 @@ async def main(argv: Sequence[str] | None = None) -> None:
 
         print(f"Agent> {response}")
 
+        if args.save_history:
+            try:
+                client.save_history(args.save_history)
+            except Exception as exc:
+                print(f"[ERROR] Failed to save history: {exc}", file=sys.stderr)
+
         if prompt_arg is not None:
             return
+
+    if args.save_history:
+        try:
+            client.save_history(args.save_history)
+        except Exception as exc:
+            print(f"[ERROR] Failed to save history: {exc}", file=sys.stderr)
 
 
 if __name__ == "__main__":  # pragma: no cover

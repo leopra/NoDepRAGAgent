@@ -1,0 +1,48 @@
+{
+  "history": [
+    {
+      "role": "system",
+      "content": "Choose between the `query_postgres` SQL tool and the `query_weaviate` vector search tool, or call both if needed to fully answer the request.\nWhen SQL is appropriate, call `query_postgres` with a well-formed query against the following schema:\nTable categories\n  - id INTEGER PRIMARY KEY NOT NULL\n  - name VARCHAR(80) NOT NULL\n\nTable customers\n  - id INTEGER PRIMARY KEY NOT NULL\n  - name VARCHAR(100) NOT NULL\n  - email VARCHAR(255) NOT NULL\n\nTable suppliers\n  - id INTEGER PRIMARY KEY NOT NULL\n  - name VARCHAR(120) NOT NULL\n  - contact_email VARCHAR(255) NOT NULL\n\nTable customer_addresses\n  - id INTEGER PRIMARY KEY NOT NULL\n  - customer_id INTEGER NOT NULL REFERENCES customers.id\n  - label VARCHAR(50) NOT NULL\n  - street VARCHAR(255) NOT NULL\n  - city VARCHAR(120) NOT NULL\n  - state VARCHAR(120) NOT NULL\n  - postal_code VARCHAR(20) NOT NULL\n  - country VARCHAR(120) NOT NULL\n\nTable items\n  - id INTEGER PRIMARY KEY NOT NULL\n  - name VARCHAR(120) NOT NULL\n  - price NUMERIC(10, 2) NOT NULL\n  - category_id INTEGER NULLABLE REFERENCES categories.id\n\nTable item_suppliers\n  - id INTEGER PRIMARY KEY NOT NULL\n  - item_id INTEGER NOT NULL REFERENCES items.id\n  - supplier_id INTEGER NOT NULL REFERENCES suppliers.id\n  - wholesale_price NUMERIC(10, 2) NOT NULL\n  - lead_time_days INTEGER NOT NULL DEFAULT 7\n\nTable purchases\n  - id INTEGER PRIMARY KEY NOT NULL\n  - customer_id INTEGER NOT NULL REFERENCES customers.id\n  - item_id INTEGER NOT NULL REFERENCES items.id\n  - quantity INTEGER NOT NULL DEFAULT 1\n  - total_amount NUMERIC(10, 2) NOT NULL\n  - purchased_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT <function Purchase.<lambda> at 0x7ed19dc2a660>\n  - shipping_address_id INTEGER NULLABLE REFERENCES customer_addresses.id\nIf you encounter an error analyze it and retry.Don't make up any information, only use information you retrieved from SQL or the Vector Database to answer the question.\nOnce you have the final answer call the final_answer tool, do not answer in any other way.\nMake sure that the tool inputs are always json parsable, do not forget double quotes or parentesys.\nBefore asking questions to the user search for answers to the question and then reason if you need more information to answer.\n"
+    },
+    {
+      "role": "user",
+      "content": "how many keyboards did we sell and when does the AI Council meet?"
+    },
+    {
+      "role": "assistant",
+      "tool_calls": [
+        {
+          "id": "call_rhcbzrgf",
+          "type": "function",
+          "function": {
+            "name": "query_postgres",
+            "arguments": {
+              "limit": 10,
+              "sql": "SELECT i.name AS item_name, SUM(p.quantity) AS total_sold FROM purchases p JOIN items i ON p.item_id = i.id WHERE i.name = 'Keyboard' GROUP BY i.name;"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call_rhcbzrgf",
+      "content": {
+        "rows": []
+      }
+    }
+  ],
+  "tool_calls": [
+    {
+      "_type": "ToolCall",
+      "name": "query_postgres",
+      "arguments": {
+        "limit": 10,
+        "sql": "SELECT i.name AS item_name, SUM(p.quantity) AS total_sold FROM purchases p JOIN items i ON p.item_id = i.id WHERE i.name = 'Keyboard' GROUP BY i.name;"
+      },
+      "id": "call_rhcbzrgf"
+    }
+  ],
+  "is_final_answer": true,
+  "final_answer_payload": null
+}
