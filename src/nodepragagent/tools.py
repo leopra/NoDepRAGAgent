@@ -31,7 +31,9 @@ ToolResponse = Dict[str, Any]
 class ToolCallback(Protocol):
     """Callable protocol that supports synchronous or asynchronous execution."""
 
-    def __call__(self, *args: Any, **kwargs: Any) -> Union[ToolResponse, Awaitable[ToolResponse]]: ...
+    def __call__(
+        self, *args: Any, **kwargs: Any
+    ) -> Union[ToolResponse, Awaitable[ToolResponse]]: ...
 
 
 @dataclass(frozen=True)
@@ -169,6 +171,8 @@ def query_postgres(*, sql: str, limit: int = 50) -> Dict[str, Any]:
         return {"rows": [], "error": str(exc)}
     except Exception as exc:  # pragma: no cover - unexpected errors
         return {"rows": [], "error": str(exc)}
+    finally:
+        engine.dispose()
 
 
 def _weaviate_client() -> weaviate.WeaviateAsyncClient:
@@ -186,7 +190,9 @@ def _weaviate_client() -> weaviate.WeaviateAsyncClient:
     )
 
 
-async def query_weaviate(*, query: str, limit: int = 3, category: Optional[str] = None) -> Dict[str, Any]:
+async def query_weaviate(
+    *, query: str, limit: int = 3, category: Optional[str] = None
+) -> Dict[str, Any]:
     """Query Weaviate for documents related to the supplied query string."""
 
     normalized_limit = max(1, min(limit, 10))
@@ -207,7 +213,7 @@ async def query_weaviate(*, query: str, limit: int = 3, category: Optional[str] 
         return {"results": [], "error": f"Failed to connect to Weaviate: {exc}"}
 
     filters = None
-    #TODO disabled category for now
+    # TODO disabled category for now
     # if category:
     #     normalized_category = category.strip()
     #     if normalized_category:
@@ -228,7 +234,6 @@ async def query_weaviate(*, query: str, limit: int = 3, category: Optional[str] 
         return {"results": [], "error": str(exc)}
     finally:
         await client.close()
-
 
     documents = []
     for obj in getattr(query_result, "objects", []):

@@ -40,7 +40,6 @@ async def _reset_schema(client: weaviate.WeaviateAsyncClient) -> None:
     )
 
 
-
 def _documents() -> list[dict[str, str]]:
     return [
         {
