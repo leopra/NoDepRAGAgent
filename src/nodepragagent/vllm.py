@@ -1,7 +1,8 @@
 """Utilities for calling a vLLM OpenAI-compatible endpoint."""
 
 from __future__ import annotations
-
+import asyncio
+import functools
 import inspect
 import json
 from typing import Any, Callable, Dict, List, Sequence
@@ -11,6 +12,7 @@ from openai.types.chat import (
     ChatCompletionMessageParam,
     ChatCompletionFunctionToolParam,
     ChatCompletionMessageFunctionToolCall,
+    ChatCompletionMessageCustomToolCall
 )
 from .db import schema_summary
 from .memory import (
@@ -20,7 +22,7 @@ from .memory import (
     system_message,
     user_message,
 )
-from .tools import FINAL_ANSWER_TOOL, OPENAI_CHAT_TOOLS, TOOLS
+from .tools import FINAL_ANSWER_TOOL, OPENAI_CHAT_TOOLS, TOOLS, FINAL_ANSWER_TOOL_NAME
 from .utils import _tool_name
 from .config import VLLMConfig
 
@@ -28,9 +30,6 @@ EventPayload = Dict[str, Any]
 EventReporter = Callable[[str, EventPayload], None]
 
 MAX_ITERATIONS = 10
-
-FINAL_ANSWER_TOOL_NAME = "final_answer"
-
 
 class VLLMClient:
     """Thin wrapper around the OpenAI client so we can mock responses in tests."""
@@ -58,6 +57,7 @@ class VLLMClient:
         )
         self.history: List[ChatCompletionMessageParam] = [system_message(schema_message)]
         self.tool_call_records: List[ToolCall] = []
+        self.is_final_answer = False
 
     async def generate(
         self,
@@ -129,15 +129,16 @@ class VLLMClient:
                     self._log_event("model_response", content=msg.content)
                     self.history.append(assistant_message(msg.content))
                 elif msg.tool_calls:
-                    if final:= self.handle_tools(self, msg.tool_calls):
-                        return final
+                    await self.handle_tools(msg.tool_calls)
+            if self.is_final_answer:
+                return json.dumps(self.history[-1])
 
             it += 1
 
         self._log_event("max_iterations_reached", iterations=MAX_ITERATIONS)
         return json.dumps(self.history[-1])
 
-    async def handle_tools(self, tool_calls: List[ChatCompletionMessageFunctionToolCall]):
+    async def handle_tools(self, tool_calls: List[ChatCompletionMessageFunctionToolCall | ChatCompletionMessageCustomToolCall]) -> str | None:
         #TODO can I manage to get 2 tool calls in the same response?
         for tool_call in tool_calls:
             assert isinstance(tool_call, ChatCompletionMessageFunctionToolCall)
@@ -166,8 +167,7 @@ class VLLMClient:
             elif not isinstance(arguments, dict):
                 tool_response = {"error": "Tool arguments must be a JSON object."}
             else:
-                result = callback(**arguments)
-                tool_response = await result if inspect.isawaitable(result) else result
+                tool_response = await run(callback, **arguments)
 
             tool_message = ToolMessage(
                 tool_call_id=tool_call.id,
@@ -188,7 +188,8 @@ class VLLMClient:
                     tool_call_id=tool_call.id,
                     response=tool_response,
                 )
-                return json.dumps(tool_response)
+                self.is_final_answer = True
+        return None
 
     def _log_event(self, event: str, **payload: Any) -> None:
         self._report(event, payload)
@@ -196,3 +197,13 @@ class VLLMClient:
     def _report(self, event: str, payload: EventPayload) -> None:
         if self._reporter is not None:
             self._reporter(event, payload)
+
+# --- wrapper: run sync in executor, await async directly ---
+async def run(func, *args, **kwargs):
+    if asyncio.iscoroutinefunction(func):
+        return await func(*args, **kwargs)
+    else:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            None, functools.partial(func, *args, **kwargs)
+        )

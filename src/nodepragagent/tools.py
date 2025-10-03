@@ -303,8 +303,10 @@ QUERY_WEAVIATE_TOOL = Tool(
     callback=query_weaviate,
 )
 
+FINAL_ANSWER_TOOL_NAME = "final_answer"
+
 FINAL_ANSWER_TOOL = Tool(
-    name="final_answer",
+    name=FINAL_ANSWER_TOOL_NAME,
     description="Return the final answer to the user and stop further tool usage.",
     parameters={
         "type": "object",
