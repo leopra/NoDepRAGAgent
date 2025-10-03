@@ -78,12 +78,6 @@ def _semantic_score(additional: Dict[str, Any]) -> Optional[float]:
     return None
 
 
-def sum_two_numbers(*, a: float, b: float) -> Dict[str, Any]:
-    """Compute the sum of two numbers in a tool-call-friendly format."""
-
-    return {"total": a + b}
-
-
 def final_answer(*, answer: str, sources: Optional[List[str]] = None) -> Dict[str, Any]:
     """Return the final answer payload that should be surfaced to the user."""
 
@@ -179,8 +173,6 @@ def _weaviate_client() -> weaviate.WeaviateAsyncClient:
     """Construct a Weaviate client from environment variables, REST-only (no gRPC)."""
 
     url = os.getenv("WEAVIATE_URL", "http://localhost:8080")
-
-    # Only use REST (don’t specify gRPC)
     connection_params = ConnectionParams.from_url(url, grpc_port=50051)
 
     return weaviate.WeaviateAsyncClient(
@@ -257,25 +249,6 @@ async def query_weaviate(
     return {"results": documents}
 
 
-SUM_TWO_NUMBERS_TOOL = Tool(
-    name="sum_two_numbers",
-    description="Add two numeric values and return their total.",
-    parameters={
-        "type": "object",
-        "properties": {
-            "a": {
-                "type": "number",
-                "description": "First addend.",
-            },
-            "b": {
-                "type": "number",
-                "description": "Second addend.",
-            },
-        },
-        "required": ["a", "b"],
-    },
-    callback=sum_two_numbers,
-)
 
 QUERY_POSTGRES_TOOL = Tool(
     name="query_postgres",
@@ -376,7 +349,6 @@ REQUEST_USER_INPUT_TOOL = Tool(
 )
 
 ALL_TOOLS: tuple[Tool, ...] = (
-    # SUM_TWO_NUMBERS_TOOL,
     QUERY_POSTGRES_TOOL,
     QUERY_WEAVIATE_TOOL,
     FINAL_ANSWER_TOOL,

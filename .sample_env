@@ -1,0 +1,5 @@
+HF_TOKEN=YOUR_HF_TOKEN
+POSTGRES_URL=postgresql+psycopg://rag_user:rag_password@localhost:5432/rag_db
+WEAVIATE_URL=http://localhost:8080
+EMBEDDING_MODEL=nomic-embed-text
+OLLAMA_EMBEDDING_MODEL=nomic-embed-text
