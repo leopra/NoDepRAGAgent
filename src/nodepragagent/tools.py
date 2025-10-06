@@ -7,6 +7,8 @@ import sys
 from dataclasses import dataclass
 from typing import Any, Awaitable, Dict, List, Optional, Protocol, Union
 
+from pydantic import BaseModel, Field
+
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import SQLAlchemyError
@@ -42,8 +44,14 @@ class Tool:
 
     name: str
     description: str
-    parameters: Dict[str, Any]
+    args_model: type[BaseModel]
     callback: ToolCallback
+
+    @property
+    def parameters(self) -> Dict[str, Any]:
+        """Return the OpenAPI-compatible JSON schema for the tool parameters."""
+
+        return self.args_model.model_json_schema()
 
     def to_openai_tool(self) -> ChatCompletionFunctionToolParam:
         """Return the ChatCompletions tool specification for this tool."""
@@ -273,27 +281,45 @@ async def query_weaviate(
 
 
 
+class QueryPostgresArgs(BaseModel):
+    sql: str = Field(
+        ...,
+        min_length=1,
+        description="SQL statement to run; prefer read-only SELECT queries.",
+    )
+    limit: int = Field(
+        50,
+        ge=1,
+        le=200,
+        description="Maximum number of rows to return (default 50).",
+    )
+
+
 QUERY_POSTGRES_TOOL = Tool(
     name="query_postgres",
     description="Execute a SQL query against the Postgres operational database.",
-    parameters={
-        "type": "object",
-        "properties": {
-            "sql": {
-                "type": "string",
-                "description": "SQL statement to run; prefer read-only SELECT queries.",
-            },
-            "limit": {
-                "type": "integer",
-                "description": "Maximum number of rows to return (default 50).",
-                "minimum": 1,
-                "maximum": 200,
-            },
-        },
-        "required": ["sql"],
-    },
+    args_model=QueryPostgresArgs,
     callback=query_postgres,
 )
+
+
+class QueryWeaviateArgs(BaseModel):
+    query: str = Field(
+        ...,
+        min_length=1,
+        description="Natural language query describing the needed information.",
+    )
+    limit: int = Field(
+        3,
+        ge=1,
+        le=10,
+        description="Maximum number of documents to return (default 3).",
+    )
+    category: Optional[str] = Field(
+        None,
+        description="Optional category filter; only documents with this category will be returned.",
+    )
+
 
 QUERY_WEAVIATE_TOOL = Tool(
     name="query_weaviate",
@@ -301,53 +327,42 @@ QUERY_WEAVIATE_TOOL = Tool(
         "Retrieve the most relevant product or company insight documents from the Weaviate"
         " vector database."
     ),
-    parameters={
-        "type": "object",
-        "properties": {
-            "query": {
-                "type": "string",
-                "description": "Natural language query describing the needed information.",
-            },
-            "limit": {
-                "type": "integer",
-                "description": "Maximum number of documents to return (default 3).",
-                "minimum": 1,
-                "maximum": 10,
-            },
-            "category": {
-                "type": "string",
-                "description": (
-                    "Optional category filter; only documents with this category will be returned."
-                ),
-            },
-        },
-        "required": ["query"],
-    },
+    args_model=QueryWeaviateArgs,
     callback=query_weaviate,
 )
 
 FINAL_ANSWER_TOOL_NAME = "final_answer"
 
+
+class FinalAnswerArgs(BaseModel):
+    answer: str = Field(
+        ...,
+        description="Final response that should be relayed to the user.",
+    )
+    sources: Optional[List[str]] = Field(
+        default=None,
+        description="Optional list of references or citations supporting the answer.",
+    )
+
+
 FINAL_ANSWER_TOOL = Tool(
     name=FINAL_ANSWER_TOOL_NAME,
     description="Return the final answer to the user and stop further tool usage.",
-    parameters={
-        "type": "object",
-        "properties": {
-            "answer": {
-                "type": "string",
-                "description": "Final response that should be relayed to the user.",
-            },
-            "sources": {
-                "type": "array",
-                "items": {"type": "string"},
-                "description": "Optional list of references or citations supporting the answer.",
-            },
-        },
-        "required": ["answer"],
-    },
+    args_model=FinalAnswerArgs,
     callback=final_answer,
 )
+
+
+class RequestUserInputArgs(BaseModel):
+    prompt: str = Field(
+        ...,
+        description="Question that should be shown directly to the user.",
+    )
+    allow_empty: bool = Field(
+        False,
+        description="Allow an empty response to be treated as valid input.",
+    )
+
 
 REQUEST_USER_INPUT_TOOL = Tool(
     name="request_user_input",
@@ -355,21 +370,7 @@ REQUEST_USER_INPUT_TOOL = Tool(
         "Ask the end user for additional information when the current context is insufficient "
         "to continue."
     ),
-    parameters={
-        "type": "object",
-        "properties": {
-            "prompt": {
-                "type": "string",
-                "description": "Question that should be shown directly to the user.",
-            },
-            "allow_empty": {
-                "type": "boolean",
-                "description": "Allow an empty response to be treated as valid input.",
-                "default": False,
-            },
-        },
-        "required": ["prompt"],
-    },
+    args_model=RequestUserInputArgs,
     callback=request_user_input,
 )
 
@@ -380,7 +381,7 @@ ALL_TOOLS: tuple[Tool, ...] = (
     REQUEST_USER_INPUT_TOOL,
 )
 
-TOOLS: dict[str, ToolCallback] = {tool.name: tool.callback for tool in ALL_TOOLS}
+TOOLS: dict[str, Tool] = {tool.name: tool for tool in ALL_TOOLS}
 
 OPENAI_CHAT_TOOLS: tuple[ChatCompletionFunctionToolParam, ...] = tuple(
     tool.to_openai_tool() for tool in ALL_TOOLS

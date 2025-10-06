@@ -13,35 +13,8 @@ class MessageRole(str, Enum):
     SYSTEM = "system"
     TOOL = "tool"
 
-
-def _tool_name(tool: ChatCompletionFunctionToolParam) -> str:
-    """Best-effort extraction of a tool name from the OpenAI tool descriptor."""
-
-    try:
-        assert "function" in tool
-        function = tool["function"]
-    except AttributeError:
-        function = None
-
-    if function is not None:
-        try:
-            assert hasattr(function, "name")
-            name = function.name
-        except AttributeError:
-            name = None
-        else:
-            if isinstance(name, str):
-                return name
-
-    if isinstance(tool, dict):
-        function_dict = tool.get("function")
-        if isinstance(function_dict, dict):
-            name = function_dict.get("name")
-            if isinstance(name, str):
-                return name
-
-    return ""
-
+def get_tool_name(tool: ChatCompletionFunctionToolParam) -> str:
+    return getattr(tool, "function", tool).name if hasattr(tool, "function") else getattr(tool, "name", "")
 
 def _format_payload(payload: object) -> str:
     """Render tool arguments or responses for CLI output."""
@@ -65,11 +38,7 @@ def cli_event_printer(event: str, payload: dict[str, Any]) -> None:
         return
     if event == "model_request":
         tools = payload.get("tools") or []
-        if isinstance(tools, (list, tuple)):
-            tool_list = ", ".join(str(tool) for tool in tools)
-        else:
-            tool_list = str(tools)
-        print(f"{prefix}-> calling model with tools: {tool_list}")
+        print(f"{prefix}-> calling model")
     elif event == "model_response":
         content = payload.get("content", "")
         print(f"{prefix}Model> {content}")

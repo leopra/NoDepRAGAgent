@@ -43,4 +43,4 @@ class DeepSeekConfig(ServiceConfig):
 
     base_url: str = _env_field("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
     api_key: str = _env_field("DEEPSEEK_API_KEY", "")
-    model: str = _env_field("DEEPSEEK_MODEL", "deepseek-reasoner")
+    model: str = _env_field("DEEPSEEK_MODEL", "deepseek-chat")

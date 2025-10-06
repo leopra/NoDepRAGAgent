@@ -3,7 +3,6 @@
 from __future__ import annotations
 import asyncio
 import functools
-import inspect
 import json
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Sequence
@@ -25,10 +24,12 @@ from .memory import (
     user_message,
     make_json_serializable,
 )
+from pydantic import ValidationError
+
 from .tools import FINAL_ANSWER_TOOL, OPENAI_CHAT_TOOLS, TOOLS, FINAL_ANSWER_TOOL_NAME
-from .utils import _tool_name
 from .config import VLLMConfig, ServiceConfig, DeepSeekConfig
 from .db import Base
+from .utils import get_tool_name
 
 EventPayload = Dict[str, Any]
 EventReporter = Callable[[str, EventPayload], None]
@@ -69,7 +70,7 @@ class SearchAgent:
         self.final_answer_payload: Any | None = None
         self.final_answer_tool: ChatCompletionFunctionToolParam = FINAL_ANSWER_TOOL.to_openai_tool()
         self.tool_spec: List[ChatCompletionFunctionToolParam] = list(OPENAI_CHAT_TOOLS)
-        if not any(_tool_name(tool) == FINAL_ANSWER_TOOL_NAME for tool in self.tool_spec):
+        if not any(get_tool_name(tool) == FINAL_ANSWER_TOOL_NAME for tool in self.tool_spec):
             self.tool_spec.append(self.final_answer_tool)
         print(self.config)
         
@@ -110,22 +111,12 @@ class SearchAgent:
         self._log_event("user_message", message=message)
         self.history.append(user_message(message))
 
-        if tools is not None:
-            tool_spec = list(tools)
-            if not any(_tool_name(tool) == FINAL_ANSWER_TOOL_NAME for tool in tool_spec):
-                tool_spec.append(self.final_answer_tool)
-        else:
-            tool_spec = list(self.tool_spec)
-
-
         it = 0
         while it < MAX_ITERATIONS:
-            tool_names = [_tool_name(t) for t in tool_spec]
             self._log_event(
                 "model_request",
                 temperature=temperature,
                 max_tokens=max_tokens,
-                tools=tool_names,
             )
 
             response = await self._client.chat.completions.create(
@@ -133,7 +124,7 @@ class SearchAgent:
                 messages=self.history,
                 temperature=temperature,
                 max_tokens=max_tokens,
-                tools=tool_spec,
+                tools=self.tool_spec,
                 tool_choice="auto",
             )
 
@@ -185,14 +176,24 @@ class SearchAgent:
                 arguments=arguments,
             )
 
-            callback = TOOLS.get(tool_name)
+            tool = TOOLS.get(tool_name)
 
-            if callback is None:
+            if tool is None:
                 tool_response = {"error": f"Unknown tool: {tool_name}"}
             elif not isinstance(arguments, dict):
                 tool_response = {"error": "Tool arguments must be a JSON object."}
             else:
-                tool_response = await run(callback, **arguments)
+                try:
+                    validated_args = tool.args_model(**arguments)
+                except ValidationError as exc:
+                    tool_response = {
+                        "error": "Invalid tool arguments.",
+                        "details": json.dumps(exc.errors()),
+                    }
+                else:
+                    tool_response = await run(
+                        tool.callback, **validated_args.model_dump(exclude_none=True)
+                    )
 
             tool_message = ToolMessage(
                 tool_call_id=tool_call.id,
