@@ -58,6 +58,7 @@ class Item(Base):
     suppliers: Mapped[List["Supplier"]] = relationship(
         secondary="item_suppliers",
         back_populates="items",
+        overlaps="supplier_links",
     )
 
 
@@ -84,10 +85,12 @@ class Supplier(Base):
     item_links: Mapped[List["ItemSupplier"]] = relationship(
         back_populates="supplier",
         cascade="all, delete-orphan",
+        overlaps="items,suppliers",
     )
     items: Mapped[List[Item]] = relationship(
         secondary="item_suppliers",
         back_populates="suppliers",
+        overlaps="item_links,supplier_links",
     )
 
 

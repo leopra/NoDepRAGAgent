@@ -1,7 +1,9 @@
 import json
 from enum import Enum
-from typing import Any
+from typing import Any, Dict
 
+from sqlalchemy.inspection import inspect
+from sqlalchemy.orm import DeclarativeBase
 from openai.types.chat import ChatCompletionFunctionToolParam
 
 
@@ -15,11 +17,21 @@ class MessageRole(str, Enum):
 def _tool_name(tool: ChatCompletionFunctionToolParam) -> str:
     """Best-effort extraction of a tool name from the OpenAI tool descriptor."""
 
-    function = getattr(tool, "function", None)
-    if function is not None and hasattr(function, "name"):
-        name = getattr(function, "name", "")
-        if isinstance(name, str):
-            return name
+    try:
+        assert "function" in tool
+        function = tool["function"]
+    except AttributeError:
+        function = None
+
+    if function is not None:
+        try:
+            assert hasattr(function, "name")
+            name = function.name
+        except AttributeError:
+            name = None
+        else:
+            if isinstance(name, str):
+                return name
 
     if isinstance(tool, dict):
         function_dict = tool.get("function")
@@ -83,3 +95,43 @@ def cli_event_printer(event: str, payload: dict[str, Any]) -> None:
             print(f"{prefix}<-- model reasoning\n{formatted_reasoning}")
     elif event == "max_iterations_reached":
         print("[warn] Maximum iterations reached without final answer")
+
+
+def serialize_schema(base_model: DeclarativeBase) -> Dict[str, Dict[str, Any]]:
+    """Convert SQLAlchemy ORM metadata into a JSON-friendly schema."""
+
+    schema: Dict[str, Dict[str, Any]] = {}
+    for mapper in base_model.registry.mappers:
+        model = mapper.class_
+        table_info: Dict[str, Any] = {
+            "table_name": model.__tablename__,
+            "columns": [],
+            "relationships": [],
+        }
+        inspection = inspect(model)
+
+        for column in inspection.columns:
+            table_info["columns"].append(
+                {
+                    "name": column.key,
+                    "type": str(column.type),
+                    "primary_key": column.primary_key,
+                    "nullable": column.nullable,
+                    "default": str(column.default.arg) if column.default else None,
+                }
+            )
+
+        for relationship in inspection.relationships:
+            table_info["relationships"].append(
+                {
+                    "name": relationship.key,
+                    "target": relationship.mapper.class_.__name__,
+                    "uselist": relationship.uselist,
+                    "direction": str(relationship.direction),
+                    "back_populates": relationship.back_populates,
+                }
+            )
+
+        schema[model.__name__] = table_info
+
+    return schema

@@ -2,21 +2,18 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from nodepragagent.vllm import VLLMClient
+from nodepragagent.vllm import SearchAgent
 
 ASSET_PATH = Path(__file__).parent / "assets" / "system_prompt.txt"
 
 
 def _runtime_system_prompt() -> str:
-    client = VLLMClient(client=object())
+    client = SearchAgent()
     first_message = client.history[0]
 
     content = None
-    try:
-        content = first_message["content"]  # type: ignore[index]
-    except (TypeError, KeyError):
-        content = getattr(first_message, "content", None)
-
+    assert "content" in first_message, "first_message does not have 'content' key"
+    content = first_message["content"]
     if content is None:
         raise AssertionError("System prompt content unavailable")
 

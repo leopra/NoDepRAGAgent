@@ -10,11 +10,11 @@ from typing import Any, Awaitable, Dict, List, Optional, Protocol, Union
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import SQLAlchemyError
-from weaviate.connect import ConnectionParams  # type: ignore[import-not-found]
+from weaviate.connect import ConnectionParams
 
-import weaviate  # type: ignore[import-untyped]
-from weaviate.collections.classes.filters import Filter  # type: ignore[attr-defined]
-from weaviate.collections.classes.grpc import MetadataQuery  # type: ignore[attr-defined]
+import weaviate 
+from weaviate.collections.classes.filters import Filter 
+from weaviate.collections.classes.grpc import MetadataQuery 
 from weaviate.exceptions import WeaviateBaseError
 
 from openai.types.chat import ChatCompletionFunctionToolParam
@@ -138,9 +138,7 @@ def query_postgres(*, sql: str, limit: int = 50) -> Dict[str, Any]:
 
     try:
         engine = _postgres_engine()
-    except ModuleNotFoundError as exc:  # pragma: no cover - driver missing in runtime env
-        return {"rows": [], "error": f"Missing Postgres driver: {exc}"}
-    except Exception as exc:  # pragma: no cover - unexpected configuration problems
+    except Exception as exc:
         return {"rows": [], "error": str(exc)}
 
     try:
@@ -163,7 +161,7 @@ def query_postgres(*, sql: str, limit: int = 50) -> Dict[str, Any]:
             return payload
     except SQLAlchemyError as exc:
         return {"rows": [], "error": str(exc)}
-    except Exception as exc:  # pragma: no cover - unexpected errors
+    except Exception as exc:
         return {"rows": [], "error": str(exc)}
     finally:
         engine.dispose()
@@ -228,12 +226,34 @@ async def query_weaviate(
         await client.close()
 
     documents = []
-    for obj in getattr(query_result, "objects", []):
-        properties = getattr(obj, "properties", {}) or {}
-        metadata = getattr(obj, "metadata", None)
-        additional = {
-            "certainty": getattr(metadata, "certainty", None),
-        }
+    try:
+        objects = query_result.objects
+    except AttributeError:
+        objects = []
+
+    for obj in objects or []:
+        try:
+            properties = obj.properties
+        except AttributeError:
+            properties = {}
+        properties = properties or {}
+
+        try:
+            metadata = obj.metadata
+        except AttributeError:
+            metadata = None
+
+        if isinstance(metadata, dict):
+            certainty_value = metadata.get("certainty")
+        elif metadata is None:
+            certainty_value = None
+        else:
+            try:
+                certainty_value = metadata.certainty
+            except AttributeError:
+                certainty_value = None
+
+        additional = {"certainty": certainty_value}
         certainty = additional["certainty"]
         if certainty is not None:
             try:

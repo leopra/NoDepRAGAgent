@@ -17,12 +17,16 @@ classifiers = [
 ]
 dependencies = [
     "huggingface-hub>=0.35.1",
+    "mypy>=1.18.2",
     "openai>=1.109.1",
     "psycopg[binary]>=3.2.10",
+    "pydantic>=2.11.9",
+    "python-dotenv>=1.0.1",
     "pytest>=8.4.2",
     "sqlalchemy>=2.0.43",
     "weaviate>=0.1.2",
     "weaviate-client>=4.0.0",
+    "pydantic-settings>=2.11.0",
 ]
 
 [project.optional-dependencies]

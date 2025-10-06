@@ -15,7 +15,8 @@ from openai.types.chat import (
     ChatCompletionMessageFunctionToolCall,
     ChatCompletionMessageCustomToolCall
 )
-from .db import schema_summary
+from .utils import serialize_schema
+
 from .memory import (
     ToolCall,
     ToolMessage,
@@ -26,31 +27,36 @@ from .memory import (
 )
 from .tools import FINAL_ANSWER_TOOL, OPENAI_CHAT_TOOLS, TOOLS, FINAL_ANSWER_TOOL_NAME
 from .utils import _tool_name
-from .config import VLLMConfig
+from .config import VLLMConfig, ServiceConfig, DeepSeekConfig
+from .db import Base
 
 EventPayload = Dict[str, Any]
 EventReporter = Callable[[str, EventPayload], None]
 
 MAX_ITERATIONS = 10
 
-class VLLMClient:
+SCHEMA_JSON = serialize_schema(Base())
+
+if __name__ == "__main__":
+    print(json.dumps(SCHEMA_JSON, indent=2))
+
+class SearchAgent:
     """Thin wrapper around the OpenAI client so we can mock responses in tests."""
 
     def __init__(
         self,
-        config: VLLMConfig | None = None,
-        client: AsyncOpenAI | None = None,
+        config: ServiceConfig | None = None,
         reporter: EventReporter | None = None,
     ) -> None:
-        self.config = config or VLLMConfig()
-        self._client = client or AsyncOpenAI(
+        self.config = config or DeepSeekConfig()
+        self._client = AsyncOpenAI(
             base_url=self.config.base_url, api_key=self.config.api_key
         )
         self._reporter = reporter
         schema_message = (
             "Choose between the `query_postgres` SQL tool and the `query_weaviate` vector search tool, or call both if needed to fully answer the request.\n"
             "When SQL is appropriate, call `query_postgres` with a well-formed query against the following schema:\n"
-            f"{schema_summary()}\n"
+            f"{json.dumps(SCHEMA_JSON, indent=2)}\n"
             "If you encounter an error analyze it and retry."
             "Don't make up any information, only use information you retrieved from SQL or the Vector Database to answer the question.\n"
             "Once you have the final answer call the final_answer tool, do not answer in any other way.\n"
@@ -61,7 +67,12 @@ class VLLMClient:
         self.tool_call_records: List[ToolCall] = []
         self.is_final_answer = False
         self.final_answer_payload: Any | None = None
-
+        self.final_answer_tool: ChatCompletionFunctionToolParam = FINAL_ANSWER_TOOL.to_openai_tool()
+        self.tool_spec: List[ChatCompletionFunctionToolParam] = list(OPENAI_CHAT_TOOLS)
+        if not any(_tool_name(tool) == FINAL_ANSWER_TOOL_NAME for tool in self.tool_spec):
+            self.tool_spec.append(self.final_answer_tool)
+        print(self.config)
+        
     async def generate(
         self,
         prompt: str,
@@ -99,10 +110,13 @@ class VLLMClient:
         self._log_event("user_message", message=message)
         self.history.append(user_message(message))
 
-        tool_spec = list(tools) if tools is not None else list(OPENAI_CHAT_TOOLS)
+        if tools is not None:
+            tool_spec = list(tools)
+            if not any(_tool_name(tool) == FINAL_ANSWER_TOOL_NAME for tool in tool_spec):
+                tool_spec.append(self.final_answer_tool)
+        else:
+            tool_spec = list(self.tool_spec)
 
-        if not any(_tool_name(tool) == FINAL_ANSWER_TOOL_NAME for tool in tool_spec):
-            tool_spec.append(FINAL_ANSWER_TOOL.to_openai_tool())
 
         it = 0
         while it < MAX_ITERATIONS:
@@ -151,7 +165,6 @@ class VLLMClient:
         return json.dumps(failure_message)
 
     async def handle_tools(self, tool_calls: List[ChatCompletionMessageFunctionToolCall | ChatCompletionMessageCustomToolCall]) -> str | None:
-        #TODO can I manage to get 2 tool calls in the same response?
         for tool_call in tool_calls:
             assert isinstance(tool_call, ChatCompletionMessageFunctionToolCall)
             raw_arguments = tool_call.function.arguments or "{}"

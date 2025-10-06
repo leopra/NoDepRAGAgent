@@ -3,11 +3,9 @@
 from __future__ import annotations
 
 import os
-from typing import List
-
+import json
 from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
-from sqlalchemy.dialects import postgresql
 
 from .models import Base
 
@@ -25,32 +23,3 @@ def create_postgres_engine() -> Engine:
 
     return create_engine(postgres_url(), future=True)
 
-
-def schema_summary() -> str:
-    """Produce a compact textual overview of the database schema."""
-
-    dialect = postgresql.dialect()
-    lines: List[str] = []
-    for table in Base.metadata.sorted_tables:
-        lines.append(f"Table {table.name}")
-        for column in table.columns:
-            type_repr = column.type.compile(dialect=dialect)
-            nullability = "NOT NULL" if not column.nullable else "NULLABLE"
-            default = column.default
-            if default is not None:
-                # Try to get the default value using SQLAlchemy's API
-                try:
-                    default_value = default.arg if hasattr(default, "arg") else str(default)
-                except Exception:
-                    default_value = str(default)
-            else:
-                default_value = None
-            default_repr = f" DEFAULT {default_value}" if default_value is not None else ""
-            pk_flag = " PRIMARY KEY" if column.primary_key else ""
-            fk = next(iter(column.foreign_keys), None)
-            fk_repr = f" REFERENCES {fk.target_fullname}" if fk is not None else ""
-            lines.append(
-                f"  - {column.name} {type_repr}{pk_flag} {nullability}{default_repr}{fk_repr}".rstrip()
-            )
-        lines.append("")
-    return "\n".join(lines).strip()

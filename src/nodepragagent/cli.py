@@ -6,9 +6,10 @@ import sys
 from typing import Iterable, Sequence
 
 from .tools import OPENAI_CHAT_TOOLS
-from .vllm import VLLMClient, VLLMConfig
+from .vllm import SearchAgent, VLLMConfig, DeepSeekConfig
 from .utils import cli_event_printer
-
+from dotenv import load_dotenv
+load_dotenv()
 
 def _prompt_lines() -> Iterable[str]:
     """Yield successive prompts entered by the user."""
@@ -53,8 +54,8 @@ async def main(argv: Sequence[str] | None = None) -> None:
     args = parser.parse_args(argv)
     prompt_arg = " ".join(args.prompt).strip() if args.prompt else None
 
-    default_config = VLLMConfig()
-    client = VLLMClient(config=default_config, reporter=cli_event_printer)
+    default_config = DeepSeekConfig() #VLLMConfig()
+    client = SearchAgent(config=default_config, reporter=cli_event_printer)
 
     prompt_source: Iterable[str]
     if prompt_arg is not None:

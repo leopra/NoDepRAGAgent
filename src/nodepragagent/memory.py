@@ -30,15 +30,18 @@ def make_json_serializable(obj: Any) -> Any:
         return [make_json_serializable(item) for item in obj]
     elif isinstance(obj, dict):
         return {str(k): make_json_serializable(v) for k, v in obj.items()}
-    elif hasattr(obj, "__dict__"):
+    else:
+        try:
+            obj_dict = obj.__dict__
+        except AttributeError:
+            # For any other type, convert to string
+            return str(obj)
+
         # For custom objects, convert their __dict__ to a serializable format
         return {
             "_type": obj.__class__.__name__,
-            **{k: make_json_serializable(v) for k, v in obj.__dict__.items()},
+            **{k: make_json_serializable(v) for k, v in obj_dict.items()},
         }
-    else:
-        # For any other type, convert to string
-        return str(obj)
 
 
 def system_message(content: str) -> ChatCompletionSystemMessageParam:

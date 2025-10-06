@@ -3,3 +3,6 @@ POSTGRES_URL=postgresql+psycopg://rag_user:rag_password@localhost:5432/rag_db
 WEAVIATE_URL=http://localhost:8080
 EMBEDDING_MODEL=nomic-embed-text
 OLLAMA_EMBEDDING_MODEL=nomic-embed-text
+DEEPSEEK_API_KEY="sk-d0b478ddd96e4cd697432249d0673ce7"
+DEEPSEEK_BASE_URL="https://api.deepseek.com"
+DEEPSEEK_MODEL="deepseek-reasoner"
