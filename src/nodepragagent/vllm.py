@@ -68,8 +68,6 @@ class SearchAgent:
         self.final_answer_payload: str | None = None
         self.final_answer_tool: ChatCompletionFunctionToolParam = FINAL_ANSWER_TOOL.to_openai_tool()
         self.tool_spec: List[ChatCompletionFunctionToolParam] = list(tools) if tools else []
-        if not any(get_tool_name(tool) == FINAL_ANSWER_TOOL_NAME for tool in self.tool_spec):
-            self.tool_spec.append(self.final_answer_tool)
         
 
     async def generate_from_messages(
