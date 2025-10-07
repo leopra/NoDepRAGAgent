@@ -93,5 +93,5 @@ async def main(argv: Sequence[str] | None = None) -> None:
             print(f"[ERROR] Failed to save history: {exc}", file=sys.stderr)
 
 
-if __name__ == "__main__":  # pragma: no cover
+if __name__ == "__main__":
     asyncio.run(main())

@@ -85,53 +85,56 @@ class SearchAgent:
         self._log_event(ReporterEvent.USER_MESSAGE, message=message)
         self.history.append(user_message(message))
 
-        it = 0
-        while it < MAX_ITERATIONS:
-            self._log_event(
-                ReporterEvent.MODEL_REQUEST,
-                temperature=temperature,
-                max_tokens=max_tokens,
-            )
+        try:
+            it = 0
+            while it < MAX_ITERATIONS:
+                self._log_event(
+                    ReporterEvent.MODEL_REQUEST,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                )
 
-            response = await self._client.chat.completions.create(
-                model=self.config.model,
-                messages=self.history,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                tools=self.tool_spec,
-                tool_choice="auto",
-            )
+                response = await self._client.chat.completions.create(
+                    model=self.config.model,
+                    messages=self.history,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    tools=self.tool_spec,
+                    tool_choice="auto",
+                )
 
-            for choice in response.choices:
-                msg = choice.message
-                if msg.content:
-                    self._log_event(
-                        ReporterEvent.REASONING,
-                        response_reasoning=msg.model_extra.get("reasoning", None) if msg.model_extra is not None else None,
-                    )
-                    self._log_event(ReporterEvent.MODEL_RESPONSE, content=msg.content)
-                    self.history.append(assistant_message(msg.content))
-                elif msg.tool_calls:
-                    await self.handle_tools(msg.tool_calls)
-            if self.is_final_answer:
-                content = self.history[-1].get("content")
-                if isinstance(content, str) or content is None:
-                    self.final_answer_payload = content
-                else:
-                    self.final_answer_payload = json.dumps(
-                        make_json_serializable(content)
-                    )
-                assert self.final_answer_payload is not None
-                return self.final_answer_payload
+                for choice in response.choices:
+                    msg = choice.message
+                    if msg.content:
+                        self._log_event(
+                            ReporterEvent.REASONING,
+                            response_reasoning=msg.model_extra.get("reasoning", None) if msg.model_extra is not None else None,
+                        )
+                        self._log_event(ReporterEvent.MODEL_RESPONSE, content=msg.content)
+                        self.history.append(assistant_message(msg.content))
+                    elif msg.tool_calls:
+                        await self.handle_tools(msg.tool_calls)
+                if self.is_final_answer:
+                    content = self.history[-1].get("content")
+                    if isinstance(content, str) or content is None:
+                        self.final_answer_payload = content
+                    else:
+                        self.final_answer_payload = json.dumps(
+                            make_json_serializable(content)
+                        )
+                    assert self.final_answer_payload is not None
+                    return self.final_answer_payload
 
-            it += 1
+                it += 1
 
-        self._log_event(ReporterEvent.MAX_ITERATIONS_REACHED, iterations=MAX_ITERATIONS)
+            self._log_event(ReporterEvent.MAX_ITERATIONS_REACHED, iterations=MAX_ITERATIONS)
 
-        failure_error = self._build_failure_error()
-        failure_payload = failure_error.as_dict()
-        self.history.append(assistant_message(failure_payload["message"]))
-        return failure_error.as_json()
+            failure_error = self._build_failure_error()
+            failure_payload = failure_error.as_dict()
+            self.history.append(assistant_message(failure_payload["message"]))
+            return failure_error.as_json()
+        finally:
+            await self._client.close()
 
     async def handle_tools(self, tool_calls: List[ChatCompletionMessageFunctionToolCall | ChatCompletionMessageCustomToolCall]) -> str | None:
         for tool_call in tool_calls:
