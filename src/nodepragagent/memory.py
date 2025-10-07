@@ -8,6 +8,7 @@ from openai.types.chat import (
     ChatCompletionToolMessageParam,
     ChatCompletionUserMessageParam,
 )
+from pydantic import BaseModel
 
 
 def make_json_serializable(obj: Any) -> Any:
@@ -26,6 +27,8 @@ def make_json_serializable(obj: Any) -> Any:
             except json.JSONDecodeError:
                 pass
         return obj
+    elif isinstance(obj, BaseModel):
+        return make_json_serializable(obj.model_dump(exclude_none=True))
     elif isinstance(obj, (list, tuple)):
         return [make_json_serializable(item) for item in obj]
     elif isinstance(obj, dict):
@@ -100,11 +103,12 @@ class ToolMessage:
     content: Any
 
     def as_message_param(self) -> ChatCompletionToolMessageParam:
-        serialized_content = (
-            self.content
-            if isinstance(self.content, str)
-            else json.dumps(make_json_serializable(self.content))
-        )
+        if isinstance(self.content, BaseModel):
+            serialized_content = self.content.model_dump_json(exclude_none=True)
+        elif isinstance(self.content, str):
+            serialized_content = self.content
+        else:
+            serialized_content = json.dumps(make_json_serializable(self.content))
 
         return ChatCompletionToolMessageParam(
             role="tool",

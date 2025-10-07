@@ -14,7 +14,7 @@ from openai.types.chat import (
     ChatCompletionMessageFunctionToolCall,
     ChatCompletionMessageCustomToolCall
 )
-from .utils import ReporterEvent, get_tool_name, serialize_schema
+from .utils import ReporterEvent, get_tool_name
 
 from .memory import (
     ToolCall,
@@ -24,18 +24,16 @@ from .memory import (
     user_message,
     make_json_serializable,
 )
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
-from .tools import FINAL_ANSWER_TOOL, OPENAI_CHAT_TOOLS, TOOLS, FINAL_ANSWER_TOOL_NAME
+from .tools import TOOLS, FINAL_ANSWER_TOOL_NAME
 from .config import VLLMConfig, ServiceConfig, DeepSeekConfig
-from .db import Base
 from .errors import LLMError
 
 EventPayload = Dict[str, Any]
 EventReporter = Callable[[ReporterEvent, EventPayload], None]
 
 MAX_ITERATIONS = 10
-SCHEMA_JSON = serialize_schema(Base())
 
 class SearchAgent:
     """Thin wrapper around the OpenAI client so we can mock responses in tests."""
@@ -45,30 +43,28 @@ class SearchAgent:
         config: ServiceConfig | None = None,
         reporter: EventReporter | None = None,
         tools: Sequence[ChatCompletionFunctionToolParam] | None = None,
+        system_prompt: str | None = None,
     ) -> None:
         self.config = config or DeepSeekConfig()
         self._client = AsyncOpenAI(
             base_url=self.config.base_url, api_key=self.config.api_key
         )
         self._reporter = reporter
-        schema_message = (
-            "Choose between the `query_postgres` SQL tool and the `query_weaviate` vector search tool, or call both if needed to fully answer the request.\n"
-            "When SQL is appropriate, call `query_postgres` with a well-formed query against the following schema:\n"
-            f"{json.dumps(SCHEMA_JSON, indent=0)}\n"
-            "If you encounter an error analyze it and retry."
-            "Don't make up any information, only use information you retrieved from SQL or the Vector Database to answer the question.\n"
-            "Once you have the  required information, call the final_answer tool with the response.\n"
-            "Make sure that the tool inputs are always json parsable, do not forget double quotes or parentesys.\n"
-            "Before asking questions to the user search for answers to the question and then reason if you need more information to answer.\n"
-            "If you are unable to find the answer, call the final_answer tool with a truthful explanation of why you could not find it.\n"
-        )
-        self.history: List[ChatCompletionMessageParam] = [system_message(schema_message)]
+        if system_prompt is None:
+            raise ValueError("A system prompt must be provided.")
+        prompt = system_prompt
+        self.system_prompt = prompt
+        self.history: List[ChatCompletionMessageParam] = [system_message(prompt)]
         self.tool_call_records: List[ToolCall] = []
         self.is_final_answer = False
         self.final_answer_payload: str | None = None
-        self.final_answer_tool: ChatCompletionFunctionToolParam = FINAL_ANSWER_TOOL.to_openai_tool()
-        self.tool_spec: List[ChatCompletionFunctionToolParam] = list(tools) if tools else []
-        
+        provided_tools = list(tools) if tools else []
+        self.tool_spec: List[ChatCompletionFunctionToolParam] = [
+            tool
+            for tool in provided_tools
+            if get_tool_name(tool) != FINAL_ANSWER_TOOL_NAME
+        ]
+
 
     async def generate_from_messages(
         self,
@@ -101,6 +97,7 @@ class SearchAgent:
                     tool_choice="auto",
                 )
 
+                final_content: str | list[dict[str, Any]] | None = None
                 for choice in response.choices:
                     msg = choice.message
                     if msg.content:
@@ -109,16 +106,23 @@ class SearchAgent:
                             response_reasoning=msg.model_extra.get("reasoning", None) if msg.model_extra is not None else None,
                         )
                         self._log_event(ReporterEvent.MODEL_RESPONSE, content=msg.content)
-                        self.history.append(assistant_message(msg.content))
+                        serialized_content = (
+                            msg.content
+                            if isinstance(msg.content, str)
+                            else json.dumps(make_json_serializable(msg.content))
+                        )
+                        self.history.append(assistant_message(serialized_content))
+                        final_content = msg.content
+                        break
                     elif msg.tool_calls:
                         await self.handle_tools(msg.tool_calls)
-                if self.is_final_answer:
-                    content = self.history[-1].get("content")
-                    if isinstance(content, str) or content is None:
-                        self.final_answer_payload = content
+                if final_content is not None:
+                    self.is_final_answer = True
+                    if isinstance(final_content, str):
+                        self.final_answer_payload = final_content
                     else:
                         self.final_answer_payload = json.dumps(
-                            make_json_serializable(content)
+                            make_json_serializable(final_content)
                         )
                     assert self.final_answer_payload is not None
                     return self.final_answer_payload
@@ -182,6 +186,11 @@ class SearchAgent:
                         tool.callback, **validated_args.model_dump(exclude_none=True)
                     )
 
+            if isinstance(tool_response, BaseModel):
+                loggable_response = tool_response.model_dump(exclude_none=True)
+            else:
+                loggable_response = tool_response
+
             tool_message = ToolMessage(
                 tool_call_id=tool_call.id,
                 content=tool_response,
@@ -192,11 +201,8 @@ class SearchAgent:
                 ReporterEvent.TOOL_RESULT,
                 tool_name=tool_name,
                 tool_call_id=tool_call.id,
-                response=tool_response,
+                response=loggable_response,
             )
-
-            if tool_name == FINAL_ANSWER_TOOL_NAME:
-                self.is_final_answer = True
             
         return None
 

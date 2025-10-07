@@ -10,7 +10,7 @@
       "cwd": "${workspaceFolder}",
       "envFile": "${workspaceFolder}/.env",
       "justMyCode": false,
-      "args": "search for potatoes on weaviate"
+      "args": "what are the most sold items since 2024"
     }
   ]
 }

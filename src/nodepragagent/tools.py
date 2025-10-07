@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 from dataclasses import dataclass
 from typing import Any, Awaitable, Dict, List, Optional, Protocol, Union
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
@@ -21,14 +22,42 @@ from weaviate.exceptions import WeaviateBaseError
 
 from openai.types.chat import ChatCompletionFunctionToolParam
 from openai.types.shared_params import FunctionDefinition
-from .db import create_postgres_engine
+from .db import Base, create_postgres_engine
 from .embeddings import embed_contents
 from .errors import LLMError
+from .utils import serialize_schema
 
 WEAVIATE_CLASS = "ProductInsight"
+POSTGRES_SCHEMA = serialize_schema(Base())
+
+ToolResponse = Union[Dict[str, Any], BaseModel]
 
 
-ToolResponse = Dict[str, Any]
+class QueryPostgresResult(BaseModel):
+    """Structured payload returned from the SQL tool."""
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    rows: List[Dict[str, Any]] = Field(default_factory=list)
+    rowcount: Optional[int] = None
+    truncated: Optional[bool] = None
+    error: Optional[LLMError] = None
+
+
+class WeaviateDocument(BaseModel):
+    """Single document returned from Weaviate."""
+
+    title: Optional[str] = None
+    category: Optional[str] = None
+    content: Optional[str] = None
+    certainty: Optional[float] = None
+
+
+class QueryWeaviateResult(BaseModel):
+    """Structured payload returned from the Weaviate tool."""
+
+    results: List[WeaviateDocument] = Field(default_factory=list)
+    error: Optional[LLMError] = None
 
 
 class ToolCallback(Protocol):
@@ -147,39 +176,40 @@ def _postgres_engine() -> Engine:
     return create_postgres_engine()
 
 
-def query_postgres(*, sql: str, limit: int = 50) -> Dict[str, Any]:
+def query_postgres(*, sql: str, limit: int = 50) -> QueryPostgresResult:
     """Run a SQL statement and return a JSON-serializable payload."""
     # TODO query sanification
 
     sql = sql.strip()
     if not sql:
-        return {
-            "rows": [],
-            "error": LLMError(
+        return QueryPostgresResult(
+            rows=[],
+            error=LLMError(
                 reason="invalid_sql",
                 message="SQL statement must not be empty.",
-            ).as_dict(),
-        }
+            ),
+        )
 
     capped_limit = max(1, min(limit, 200))
 
+    engine: Engine | None = None
     try:
         engine = _postgres_engine()
     except Exception as exc:
-        return {
-            "rows": [],
-            "error": LLMError(
+        return QueryPostgresResult(
+            rows=[],
+            error=LLMError(
                 reason="engine_initialization_failed",
                 message=str(exc),
-            ).as_dict(),
-        }
+            ),
+        )
 
     try:
         with engine.begin() as connection:
             statement = text(sql)
             result = connection.execute(statement)
             if not result.returns_rows:
-                return {"rows": [], "rowcount": result.rowcount}
+                return QueryPostgresResult(rows=[], rowcount=result.rowcount)
 
             rows = []
             truncated = False
@@ -191,25 +221,26 @@ def query_postgres(*, sql: str, limit: int = 50) -> Dict[str, Any]:
             payload: Dict[str, Any] = {"rows": rows}
             if truncated:
                 payload["truncated"] = True
-            return payload
+            return QueryPostgresResult(**payload)
     except SQLAlchemyError as exc:
-        return {
-            "rows": [],
-            "error": LLMError(
+        return QueryPostgresResult(
+            rows=[],
+            error=LLMError(
                 reason="sql_error",
                 message=str(exc),
-            ).as_dict(),
-        }
+            ),
+        )
     except Exception as exc:
-        return {
-            "rows": [],
-            "error": LLMError(
+        return QueryPostgresResult(
+            rows=[],
+            error=LLMError(
                 reason="unexpected_error",
                 message=str(exc),
-            ).as_dict(),
-        }
+            ),
+        )
     finally:
-        engine.dispose()
+        if engine is not None:
+            engine.dispose()
 
 
 def _weaviate_client() -> weaviate.WeaviateAsyncClient:
@@ -227,45 +258,45 @@ def _weaviate_client() -> weaviate.WeaviateAsyncClient:
 
 async def query_weaviate(
     *, query: str, limit: int = 3, category: Optional[str] = None
-) -> Dict[str, Any]:
+) -> QueryWeaviateResult:
     """Query Weaviate for documents related to the supplied query string."""
 
     normalized_limit = max(1, min(limit, 10))
     query = query.strip()
     if not query:
-        return {
-            "results": [],
-            "error": LLMError(
+        return QueryWeaviateResult(
+            results=[],
+            error=LLMError(
                 reason="invalid_query",
                 message="Query string must not be empty.",
-            ).as_dict(),
-        }
+            ),
+        )
 
     client = _weaviate_client()
 
     try:
         query_vector = (await embed_contents([query]))[0]
     except Exception as exc:
-        return {
-            "results": [],
-            "error": LLMError(
+        return QueryWeaviateResult(
+            results=[],
+            error=LLMError(
                 reason="embedding_failure",
                 message="Failed to embed query.",
                 details=str(exc),
-            ).as_dict(),
-        }
+            ),
+        )
 
     try:
         await client.connect()
     except Exception as exc:  # pragma: no cover - connection issues
-        return {
-            "results": [],
-            "error": LLMError(
+        return QueryWeaviateResult(
+            results=[],
+            error=LLMError(
                 reason="connection_failure",
                 message="Failed to connect to Weaviate.",
                 details=str(exc),
-            ).as_dict(),
-        }
+            ),
+        )
 
     filters = None
     # TODO disabled category for now
@@ -283,22 +314,22 @@ async def query_weaviate(
             return_properties=["title", "category", "content"],
             return_metadata=MetadataQuery(distance=True, certainty=True),
         )
-    except WeaviateBaseError as exc:  # pragma: no cover - network errors
-        return {
-            "results": [],
-            "error": LLMError(
+    except WeaviateBaseError as exc:
+        return QueryWeaviateResult(
+            results=[],
+            error=LLMError(
                 reason="weaviate_error",
                 message=str(exc),
-            ).as_dict(),
-        }
-    except Exception as exc:  # pragma: no cover - unexpected errors
-        return {
-            "results": [],
-            "error": LLMError(
+            ),
+        )
+    except Exception as exc:
+        return QueryWeaviateResult(
+            results=[],
+            error=LLMError(
                 reason="unexpected_error",
                 message=str(exc),
-            ).as_dict(),
-        }
+            ),
+        )
     finally:
         await client.close()
 
@@ -338,15 +369,15 @@ async def query_weaviate(
             except (TypeError, ValueError):
                 certainty = additional["certainty"]
         documents.append(
-            {
-                "title": properties.get("title"),
-                "category": properties.get("category"),
-                "content": properties.get("content"),
-                "certainty": certainty,
-            }
+            WeaviateDocument(
+                title=properties.get("title"),
+                category=properties.get("category"),
+                content=properties.get("content"),
+                certainty=certainty,
+            )
         )
 
-    return {"results": documents}
+    return QueryWeaviateResult(results=documents)
 
 
 
@@ -400,7 +431,6 @@ QUERY_WEAVIATE_TOOL = Tool(
     callback=query_weaviate,
 )
 
-FINAL_ANSWER_TOOL_NAME = "final_answer"
 
 
 class FinalAnswerArgs(BaseModel):
@@ -414,6 +444,7 @@ class FinalAnswerArgs(BaseModel):
     )
 
 
+FINAL_ANSWER_TOOL_NAME = "final_answer"
 FINAL_ANSWER_TOOL = Tool(
     name=FINAL_ANSWER_TOOL_NAME,
     description="Return the final answer to the user and stop further tool usage.",
@@ -446,7 +477,6 @@ REQUEST_USER_INPUT_TOOL = Tool(
 ALL_TOOLS: tuple[Tool, ...] = (
     QUERY_POSTGRES_TOOL,
     QUERY_WEAVIATE_TOOL,
-    FINAL_ANSWER_TOOL,
     REQUEST_USER_INPUT_TOOL,
 )
 
