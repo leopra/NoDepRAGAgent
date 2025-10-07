@@ -13,6 +13,16 @@ class MessageRole(str, Enum):
     SYSTEM = "system"
     TOOL = "tool"
 
+
+class ReporterEvent(str, Enum):
+    USER_MESSAGE = "user_message"
+    MODEL_REQUEST = "model_request"
+    MODEL_RESPONSE = "model_response"
+    TOOL_CALL = "tool_call"
+    TOOL_RESULT = "tool_result"
+    REASONING = "reasoning"
+    MAX_ITERATIONS_REACHED = "max_iterations_reached"
+
 def get_tool_name(tool: ChatCompletionFunctionToolParam) -> str:
     if hasattr(tool, "function") and hasattr(tool.function, "name"):
         return tool.function.name
@@ -33,39 +43,36 @@ def _format_payload(payload: object) -> str:
         return str(payload)
 
 
-def cli_event_printer(event: str, payload: dict[str, Any]) -> None:
+def cli_event_printer(event: ReporterEvent, payload: dict[str, Any]) -> None:
     """Print VLLM client events in a human-friendly format."""
 
     iteration = payload.get("iteration")
     prefix = f"[iter {iteration}] " if iteration is not None else ""
 
-    if event == "user_message":
+    if event is ReporterEvent.USER_MESSAGE:
         return
-    if event == "model_request":
-        tools = payload.get("tools") or []
+    if event is ReporterEvent.MODEL_REQUEST:
         print(f"{prefix}-> calling model")
-    elif event == "model_response":
+    elif event is ReporterEvent.MODEL_RESPONSE:
         content = payload.get("content", "")
         print(f"{prefix}Model> {content}")
-    elif event == "tool_call":
+    elif event is ReporterEvent.TOOL_CALL:
         tool_name = payload.get("tool_name", "unknown")
         args = _format_payload(payload.get("arguments"))
         tool_id = payload.get("tool_call_id")
         suffix = f" (id: {tool_id})" if tool_id else ""
         print(f"{prefix}Tool> {tool_name}{suffix}\n{args}")
-    elif event == "tool_result":
+    elif event is ReporterEvent.TOOL_RESULT:
         tool_name = payload.get("tool_name", "unknown")
         if tool_name == "final_answer":
             return
         result = _format_payload(payload.get("response"))
         print(f"{prefix}Tool< {tool_name}\n{result}")
-    elif event == "reasoning":
+    elif event is ReporterEvent.REASONING:
         reasoning = payload.get("response_reasoning")
         if reasoning:
             formatted_reasoning = _format_payload(reasoning)
             print(f"{prefix}<-- model reasoning\n{formatted_reasoning}")
-    elif event == "max_iterations_reached":
-        print("[warn] Maximum iterations reached without final answer")
 
 
 def serialize_schema(base_model: DeclarativeBase) -> Dict[str, Dict[str, Any]]:

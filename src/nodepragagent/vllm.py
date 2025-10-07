@@ -14,7 +14,7 @@ from openai.types.chat import (
     ChatCompletionMessageFunctionToolCall,
     ChatCompletionMessageCustomToolCall
 )
-from .utils import serialize_schema
+from .utils import ReporterEvent, get_tool_name, serialize_schema
 
 from .memory import (
     ToolCall,
@@ -29,11 +29,10 @@ from pydantic import ValidationError
 from .tools import FINAL_ANSWER_TOOL, OPENAI_CHAT_TOOLS, TOOLS, FINAL_ANSWER_TOOL_NAME
 from .config import VLLMConfig, ServiceConfig, DeepSeekConfig
 from .db import Base
-from .utils import get_tool_name
 from .errors import LLMError
 
 EventPayload = Dict[str, Any]
-EventReporter = Callable[[str, EventPayload], None]
+EventReporter = Callable[[ReporterEvent, EventPayload], None]
 
 MAX_ITERATIONS = 10
 SCHEMA_JSON = serialize_schema(Base())
@@ -55,10 +54,10 @@ class SearchAgent:
         schema_message = (
             "Choose between the `query_postgres` SQL tool and the `query_weaviate` vector search tool, or call both if needed to fully answer the request.\n"
             "When SQL is appropriate, call `query_postgres` with a well-formed query against the following schema:\n"
-            f"{json.dumps(SCHEMA_JSON, indent=2)}\n"
+            f"{json.dumps(SCHEMA_JSON, indent=0)}\n"
             "If you encounter an error analyze it and retry."
             "Don't make up any information, only use information you retrieved from SQL or the Vector Database to answer the question.\n"
-            "Once you have the final answer call the final_answer tool, do not answer in any other way.\n"
+            "Once you have the  required information, call the final_answer tool with the response.\n"
             "Make sure that the tool inputs are always json parsable, do not forget double quotes or parentesys.\n"
             "Before asking questions to the user search for answers to the question and then reason if you need more information to answer.\n"
             "If you are unable to find the answer, call the final_answer tool with a truthful explanation of why you could not find it.\n"
@@ -83,13 +82,13 @@ class SearchAgent:
         """Generate a completion using an explicit message history."""
         self.is_final_answer = False
         self.final_answer_payload = None
-        self._log_event("user_message", message=message)
+        self._log_event(ReporterEvent.USER_MESSAGE, message=message)
         self.history.append(user_message(message))
 
         it = 0
         while it < MAX_ITERATIONS:
             self._log_event(
-                "model_request",
+                ReporterEvent.MODEL_REQUEST,
                 temperature=temperature,
                 max_tokens=max_tokens,
             )
@@ -107,10 +106,10 @@ class SearchAgent:
                 msg = choice.message
                 if msg.content:
                     self._log_event(
-                        "reasoning",
+                        ReporterEvent.REASONING,
                         response_reasoning=msg.model_extra.get("reasoning", None) if msg.model_extra is not None else None,
                     )
-                    self._log_event("model_response", content=msg.content)
+                    self._log_event(ReporterEvent.MODEL_RESPONSE, content=msg.content)
                     self.history.append(assistant_message(msg.content))
                 elif msg.tool_calls:
                     await self.handle_tools(msg.tool_calls)
@@ -127,7 +126,7 @@ class SearchAgent:
 
             it += 1
 
-        self._log_event("max_iterations_reached", iterations=MAX_ITERATIONS)
+        self._log_event(ReporterEvent.MAX_ITERATIONS_REACHED, iterations=MAX_ITERATIONS)
 
         failure_error = self._build_failure_error()
         failure_payload = failure_error.as_dict()
@@ -149,7 +148,7 @@ class SearchAgent:
             self.history.append(tool_call_record.as_message_param())
 
             self._log_event(
-                "tool_call",
+                ReporterEvent.TOOL_CALL,
                 tool_name=tool_name,
                 tool_call_id=tool_call.id,
                 arguments=arguments,
@@ -189,7 +188,7 @@ class SearchAgent:
             self.history.append(tool_message.as_message_param())
 
             self._log_event(
-                "tool_result",
+                ReporterEvent.TOOL_RESULT,
                 tool_name=tool_name,
                 tool_call_id=tool_call.id,
                 response=tool_response,
@@ -214,10 +213,10 @@ class SearchAgent:
         with path.open("w", encoding="utf-8") as fp:
             json.dump(payload, fp, indent=2)
 
-    def _log_event(self, event: str, **payload: Any) -> None:
+    def _log_event(self, event: ReporterEvent, **payload: Any) -> None:
         self._report(event, payload)
 
-    def _report(self, event: str, payload: EventPayload) -> None:
+    def _report(self, event: ReporterEvent, payload: EventPayload) -> None:
         if self._reporter is not None:
             self._reporter(event, payload)
 
