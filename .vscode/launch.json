@@ -10,7 +10,7 @@
       "cwd": "${workspaceFolder}",
       "envFile": "${workspaceFolder}/.env",
       "justMyCode": false,
-      "args": "how much did any person named alice buy"
+      "args": "search for potatoes on weaviate"
     }
   ]
 }

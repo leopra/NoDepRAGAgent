@@ -28,6 +28,9 @@ async def _embed_async(
     try:
         response = await client.embeddings.create(model=model, input=texts)
         return [item.embedding for item in response.data]
+    except Exception as e:
+        print(f"Error during embedding: {e}")
+        return []
     finally:
         await client.close()
 

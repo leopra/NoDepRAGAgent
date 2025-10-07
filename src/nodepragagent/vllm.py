@@ -30,16 +30,13 @@ from .tools import FINAL_ANSWER_TOOL, OPENAI_CHAT_TOOLS, TOOLS, FINAL_ANSWER_TOO
 from .config import VLLMConfig, ServiceConfig, DeepSeekConfig
 from .db import Base
 from .utils import get_tool_name
+from .errors import LLMError
 
 EventPayload = Dict[str, Any]
 EventReporter = Callable[[str, EventPayload], None]
 
 MAX_ITERATIONS = 10
-
 SCHEMA_JSON = serialize_schema(Base())
-
-if __name__ == "__main__":
-    print(json.dumps(SCHEMA_JSON, indent=2))
 
 class SearchAgent:
     """Thin wrapper around the OpenAI client so we can mock responses in tests."""
@@ -48,6 +45,7 @@ class SearchAgent:
         self,
         config: ServiceConfig | None = None,
         reporter: EventReporter | None = None,
+        tools: Sequence[ChatCompletionFunctionToolParam] | None = None,
     ) -> None:
         self.config = config or DeepSeekConfig()
         self._client = AsyncOpenAI(
@@ -63,39 +61,17 @@ class SearchAgent:
             "Once you have the final answer call the final_answer tool, do not answer in any other way.\n"
             "Make sure that the tool inputs are always json parsable, do not forget double quotes or parentesys.\n"
             "Before asking questions to the user search for answers to the question and then reason if you need more information to answer.\n"
+            "If you are unable to find the answer, call the final_answer tool with a truthful explanation of why you could not find it.\n"
         )
         self.history: List[ChatCompletionMessageParam] = [system_message(schema_message)]
         self.tool_call_records: List[ToolCall] = []
         self.is_final_answer = False
-        self.final_answer_payload: Any | None = None
+        self.final_answer_payload: str | None = None
         self.final_answer_tool: ChatCompletionFunctionToolParam = FINAL_ANSWER_TOOL.to_openai_tool()
-        self.tool_spec: List[ChatCompletionFunctionToolParam] = list(OPENAI_CHAT_TOOLS)
+        self.tool_spec: List[ChatCompletionFunctionToolParam] = list(tools) if tools else []
         if not any(get_tool_name(tool) == FINAL_ANSWER_TOOL_NAME for tool in self.tool_spec):
             self.tool_spec.append(self.final_answer_tool)
-        print(self.config)
         
-    async def generate(
-        self,
-        prompt: str,
-        *,
-        system_prompt: str | None = None,
-        temperature: float = 0.0,
-        max_tokens: int = 512,
-        tools: Sequence[ChatCompletionFunctionToolParam] | None = None,
-    ) -> str:
-        """Generate a chat completion using the vLLM-backed OpenAI API."""
-
-        if system_prompt:
-            self.history = [system_message(system_prompt)]
-
-        res = await self.generate_from_messages(
-            prompt,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            tools=tools,
-        )
-
-        return res
 
     async def generate_from_messages(
         self,
@@ -103,7 +79,6 @@ class SearchAgent:
         *,
         temperature: float = 0.0,
         max_tokens: int = 2048,
-        tools: Sequence[ChatCompletionFunctionToolParam] | None = None,
     ) -> str:
         """Generate a completion using an explicit message history."""
         self.is_final_answer = False
@@ -128,32 +103,36 @@ class SearchAgent:
                 tool_choice="auto",
             )
 
-            self._log_event(
-                "model_response_received",
-                response_reasoning=response.model_extra.get("reasoning", None) if response.model_extra is not None else None,
-            )
-
             for choice in response.choices:
                 msg = choice.message
                 if msg.content:
+                    self._log_event(
+                        "reasoning",
+                        response_reasoning=msg.model_extra.get("reasoning", None) if msg.model_extra is not None else None,
+                    )
                     self._log_event("model_response", content=msg.content)
                     self.history.append(assistant_message(msg.content))
                 elif msg.tool_calls:
                     await self.handle_tools(msg.tool_calls)
             if self.is_final_answer:
-                return json.dumps(self.history[-1])
+                content = self.history[-1].get("content")
+                if isinstance(content, str) or content is None:
+                    self.final_answer_payload = content
+                else:
+                    self.final_answer_payload = json.dumps(
+                        make_json_serializable(content)
+                    )
+                assert self.final_answer_payload is not None
+                return self.final_answer_payload
 
             it += 1
 
         self._log_event("max_iterations_reached", iterations=MAX_ITERATIONS)
 
-        failure_message = {
-            "type": "error",
-            "reason": "max_iterations_reached",
-            "message": "LLM cannot find the answer to the user question.",
-        }
-        self.history.append(assistant_message(failure_message["message"]))
-        return json.dumps(failure_message)
+        failure_error = self._build_failure_error()
+        failure_payload = failure_error.as_dict()
+        self.history.append(assistant_message(failure_payload["message"]))
+        return failure_error.as_json()
 
     async def handle_tools(self, tool_calls: List[ChatCompletionMessageFunctionToolCall | ChatCompletionMessageCustomToolCall]) -> str | None:
         for tool_call in tool_calls:
@@ -179,17 +158,25 @@ class SearchAgent:
             tool = TOOLS.get(tool_name)
 
             if tool is None:
-                tool_response = {"error": f"Unknown tool: {tool_name}"}
+                tool_response = LLMError(
+                    reason="unknown_tool",
+                    message=f"Unknown tool: {tool_name}",
+                    details={"tool_name": tool_name},
+                ).as_dict()
             elif not isinstance(arguments, dict):
-                tool_response = {"error": "Tool arguments must be a JSON object."}
+                tool_response = LLMError(
+                    reason="invalid_arguments",
+                    message="Tool arguments must be a JSON object.",
+                ).as_dict()
             else:
                 try:
                     validated_args = tool.args_model(**arguments)
                 except ValidationError as exc:
-                    tool_response = {
-                        "error": "Invalid tool arguments.",
-                        "details": json.dumps(exc.errors()),
-                    }
+                    tool_response = LLMError(
+                        reason="invalid_tool_arguments",
+                        message="Invalid tool arguments.",
+                        details=exc.errors(),
+                    ).as_dict()
                 else:
                     tool_response = await run(
                         tool.callback, **validated_args.model_dump(exclude_none=True)
@@ -209,12 +196,8 @@ class SearchAgent:
             )
 
             if tool_name == FINAL_ANSWER_TOOL_NAME:
-                self._log_event(
-                    "final_answer",
-                    tool_call_id=tool_call.id,
-                    response=tool_response,
-                )
-        self.is_final_answer = True
+                self.is_final_answer = True
+            
         return None
 
     def save_history(self, file_path: str | Path) -> None:
@@ -237,6 +220,12 @@ class SearchAgent:
     def _report(self, event: str, payload: EventPayload) -> None:
         if self._reporter is not None:
             self._reporter(event, payload)
+
+    def _build_failure_error(self) -> LLMError:
+        return LLMError(
+            reason="max_iterations_reached",
+            message="LLM cannot find the answer to the user question.",
+        )
 
 # --- wrapper: run sync in executor, await async directly ---
 async def run(func, *args, **kwargs):

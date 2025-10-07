@@ -16,6 +16,20 @@ This runs `uv sync --extra dev`, creating `.venv` and installing the project wit
 
 We'd like you to design and implement a system that can answer user questions by intelligently querying both a structured database (SQL) and an unstructured text corpus (via vector search). The key challenge is to do this without relying on existing LLM frameworks like Langchain, LlamaIndex, etc. You will need to implement the core logic for query understanding, decomposition, data retrieval, and answer synthesis.
 
+## Available Data Sets
+
+- **Transactional SQL database** (`rag.db` / Postgres when running services)  
+  - `customers`: Three sample buyers (`Alice Johnson`, `Brian Lee`, `Carla Mendes`) with unique emails.  
+  - `customer_addresses`: Four labeled addresses linked to those customers (home/office variants across IL, CA, and TX).  
+  - `categories`: Three product groupings (`Peripherals`, `Monitors`, `Accessories`).  
+  - `items`: Five catalog entries (e.g., Wireless Mouse, Mechanical Keyboard, 27-inch Monitor) with list prices and category references.  
+  - `suppliers`: Two wholesalers (`Acme Distribution`, `Brightline Wholesale`) and their contact emails.  
+  - `item_suppliers`: Pricing and lead-time metadata tying each item to one or more suppliers.  
+  - `purchases`: Six historical orders detailing customer, item, quantity, total amount, shipping address, and timestamp (defaults to UTC now).
+- **Weaviate vector store** (`ProductInsight` collection)  
+  - Schema: manual vectorizer, properties `title`, `category`, and `content`.  
+  - Documents: 16 short-form briefs covering product overviews, sales performance, company financials, policies, playbooks, and strategy notes. Categories span `item`, `company`, `policy`, `practice`, and `strategy`, providing qualitative context that complements the structured SQL facts.
+
 ## System Requirements
 
 1. Input: The system should accept a natural language question from the user.

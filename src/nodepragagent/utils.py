@@ -14,7 +14,12 @@ class MessageRole(str, Enum):
     TOOL = "tool"
 
 def get_tool_name(tool: ChatCompletionFunctionToolParam) -> str:
-    return getattr(tool, "function", tool).name if hasattr(tool, "function") else getattr(tool, "name", "")
+    if hasattr(tool, "function") and hasattr(tool.function, "name"):
+        return tool.function.name
+    elif hasattr(tool, "name"):
+        return tool.name
+    else:
+        return ""
 
 def _format_payload(payload: object) -> str:
     """Render tool arguments or responses for CLI output."""
@@ -54,10 +59,7 @@ def cli_event_printer(event: str, payload: dict[str, Any]) -> None:
             return
         result = _format_payload(payload.get("response"))
         print(f"{prefix}Tool< {tool_name}\n{result}")
-    elif event == "model_response_received":
-        response_id = payload.get("response_id")
-        if response_id:
-            print(f"{prefix}<-- model response id: {response_id}")
+    elif event == "reasoning":
         reasoning = payload.get("response_reasoning")
         if reasoning:
             formatted_reasoning = _format_payload(reasoning)

@@ -23,6 +23,7 @@ from openai.types.chat import ChatCompletionFunctionToolParam
 from openai.types.shared_params import FunctionDefinition
 from .db import create_postgres_engine
 from .embeddings import embed_contents
+from .errors import LLMError
 
 WEAVIATE_CLASS = "ProductInsight"
 
@@ -103,7 +104,10 @@ def request_user_input(*, prompt: str, allow_empty: bool = False) -> Dict[str, A
     if not sys.stdin.isatty():
         return {
             "response": None,
-            "error": "Interactive input is unavailable in the current execution context.",
+            "error": LLMError(
+                reason="input_unavailable",
+                message="Interactive input is unavailable in the current execution context.",
+            ).as_dict(),
         }
 
     try:
@@ -111,18 +115,27 @@ def request_user_input(*, prompt: str, allow_empty: bool = False) -> Dict[str, A
     except EOFError:
         return {
             "response": None,
-            "error": "Input stream closed while waiting for user response.",
+            "error": LLMError(
+                reason="input_stream_closed",
+                message="Input stream closed while waiting for user response.",
+            ).as_dict(),
         }
     except KeyboardInterrupt:
         return {
             "response": None,
-            "error": "User cancelled the input request.",
+            "error": LLMError(
+                reason="input_cancelled",
+                message="User cancelled the input request.",
+            ).as_dict(),
         }
 
     if not allow_empty and not answer.strip():
         return {
             "response": answer,
-            "error": "User response was empty.",
+            "error": LLMError(
+                reason="empty_response",
+                message="User response was empty.",
+            ).as_dict(),
         }
 
     return {"response": answer}
@@ -140,14 +153,26 @@ def query_postgres(*, sql: str, limit: int = 50) -> Dict[str, Any]:
 
     sql = sql.strip()
     if not sql:
-        return {"rows": [], "error": "SQL statement must not be empty."}
+        return {
+            "rows": [],
+            "error": LLMError(
+                reason="invalid_sql",
+                message="SQL statement must not be empty.",
+            ).as_dict(),
+        }
 
     capped_limit = max(1, min(limit, 200))
 
     try:
         engine = _postgres_engine()
     except Exception as exc:
-        return {"rows": [], "error": str(exc)}
+        return {
+            "rows": [],
+            "error": LLMError(
+                reason="engine_initialization_failed",
+                message=str(exc),
+            ).as_dict(),
+        }
 
     try:
         with engine.begin() as connection:
@@ -168,9 +193,21 @@ def query_postgres(*, sql: str, limit: int = 50) -> Dict[str, Any]:
                 payload["truncated"] = True
             return payload
     except SQLAlchemyError as exc:
-        return {"rows": [], "error": str(exc)}
+        return {
+            "rows": [],
+            "error": LLMError(
+                reason="sql_error",
+                message=str(exc),
+            ).as_dict(),
+        }
     except Exception as exc:
-        return {"rows": [], "error": str(exc)}
+        return {
+            "rows": [],
+            "error": LLMError(
+                reason="unexpected_error",
+                message=str(exc),
+            ).as_dict(),
+        }
     finally:
         engine.dispose()
 
@@ -196,19 +233,39 @@ async def query_weaviate(
     normalized_limit = max(1, min(limit, 10))
     query = query.strip()
     if not query:
-        return {"results": [], "error": "Query string must not be empty."}
+        return {
+            "results": [],
+            "error": LLMError(
+                reason="invalid_query",
+                message="Query string must not be empty.",
+            ).as_dict(),
+        }
 
     client = _weaviate_client()
 
     try:
         query_vector = (await embed_contents([query]))[0]
     except Exception as exc:
-        return {"results": [], "error": f"Failed to embed query: {exc}"}
+        return {
+            "results": [],
+            "error": LLMError(
+                reason="embedding_failure",
+                message="Failed to embed query.",
+                details=str(exc),
+            ).as_dict(),
+        }
 
     try:
         await client.connect()
     except Exception as exc:  # pragma: no cover - connection issues
-        return {"results": [], "error": f"Failed to connect to Weaviate: {exc}"}
+        return {
+            "results": [],
+            "error": LLMError(
+                reason="connection_failure",
+                message="Failed to connect to Weaviate.",
+                details=str(exc),
+            ).as_dict(),
+        }
 
     filters = None
     # TODO disabled category for now
@@ -227,9 +284,21 @@ async def query_weaviate(
             return_metadata=MetadataQuery(distance=True, certainty=True),
         )
     except WeaviateBaseError as exc:  # pragma: no cover - network errors
-        return {"results": [], "error": str(exc)}
+        return {
+            "results": [],
+            "error": LLMError(
+                reason="weaviate_error",
+                message=str(exc),
+            ).as_dict(),
+        }
     except Exception as exc:  # pragma: no cover - unexpected errors
-        return {"results": [], "error": str(exc)}
+        return {
+            "results": [],
+            "error": LLMError(
+                reason="unexpected_error",
+                message=str(exc),
+            ).as_dict(),
+        }
     finally:
         await client.close()
 
@@ -339,7 +408,7 @@ class FinalAnswerArgs(BaseModel):
         ...,
         description="Final response that should be relayed to the user.",
     )
-    sources: Optional[List[str]] = Field(
+    sources: Optional[List[Union[str, Dict[str, Any]]]] = Field(
         default=None,
         description="Optional list of references or citations supporting the answer.",
     )
@@ -383,6 +452,5 @@ ALL_TOOLS: tuple[Tool, ...] = (
 
 TOOLS: dict[str, Tool] = {tool.name: tool for tool in ALL_TOOLS}
 
-OPENAI_CHAT_TOOLS: tuple[ChatCompletionFunctionToolParam, ...] = tuple(
-    tool.to_openai_tool() for tool in ALL_TOOLS
-)
+OPENAI_CHAT_TOOLS: list[ChatCompletionFunctionToolParam] = [
+    tool.to_openai_tool() for tool in ALL_TOOLS]

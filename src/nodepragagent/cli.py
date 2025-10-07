@@ -54,8 +54,8 @@ async def main(argv: Sequence[str] | None = None) -> None:
     args = parser.parse_args(argv)
     prompt_arg = " ".join(args.prompt).strip() if args.prompt else None
 
-    default_config = DeepSeekConfig() #VLLMConfig()
-    client = SearchAgent(config=default_config, reporter=cli_event_printer)
+    default_config = VLLMConfig()
+    client = SearchAgent(config=default_config, reporter=cli_event_printer, tools=OPENAI_CHAT_TOOLS)
 
     prompt_source: Iterable[str]
     if prompt_arg is not None:
@@ -70,13 +70,12 @@ async def main(argv: Sequence[str] | None = None) -> None:
                 prompt,
                 temperature=1,
                 max_tokens=2048,
-                tools=list(OPENAI_CHAT_TOOLS),
             )
         except Exception as exc:  # pragma: no cover - network errors not deterministic in tests
             print(f"[ERROR] Failed to call model: {exc}", file=sys.stderr)
             continue
 
-        print(f"Agent> {response}")
+        print(f"Final Answer> {response}")
 
         if args.save_history:
             try:
